@@ -6,6 +6,7 @@ import it without pulling in heavyweight modules.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # --- Capture format -------------------------------------------------------
@@ -32,7 +33,22 @@ OBJECT_PREFIX = "am_i_audible"
 # avoid xruns on a busy desktop; tuned per backend if needed.
 LOOPBACK_LATENCY_MS = 100
 
+# --- Capture plumbing -----------------------------------------------------
+# ~100 ms chunk at 48 kHz mono s16. Small enough for responsive VU meters,
+# large enough to keep syscalls/overhead negligible.
+CHUNK_FRAMES = 4_800
+BYTES_PER_FRAME = 2  # s16 mono
+
 # --- Output layout --------------------------------------------------------
-RECORDINGS_ROOT = Path.home() / "Recordings" / "am-i-audible"
+# Personal default: keep everything inside the project so files are easy to
+# reach. Override with $AMIA_RECORDINGS_DIR. Both trees are git-ignored.
+RECORDINGS_ROOT = Path(
+    os.environ.get("AMIA_RECORDINGS_DIR", "~/Projects/Am-I-audible/recorded-audio")
+).expanduser()
+TRANSCRIPTS_ROOT = RECORDINGS_ROOT / "generated_transcripts"  # used from v0.2.0
+
 MIC_TRACK_FILENAME = "mic.wav"
 SYSTEM_TRACK_FILENAME = "system.wav"
+
+# --- UI -------------------------------------------------------------------
+METER_REFRESH_HZ = 12
