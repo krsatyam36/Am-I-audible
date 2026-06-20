@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "am-i-audible"
+version = "0.1.0"
+description = "Linux-native dual-audio capture + transcription pipeline for meetings"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "sounddevice>=0.4.7",
+    "soundfile>=0.12.1",
+    "numpy>=1.26",
+    "rich>=13.7",
+]
+
+[project.scripts]
+am-i-audible = "am_i_audible.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
