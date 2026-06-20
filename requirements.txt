@@ -1,8 +1,13 @@
 # --- v0.1.0 runtime (audio capture + routing + terminal UI) ---
 sounddevice>=0.4.7      # PortAudio capture from the virtual-sink monitors
 soundfile>=0.12.1       # incremental, crash-safe WAV writing
-numpy>=1.26             # frame buffers / RMS for VU meters
+numpy>=1.26             # frame buffers / RMS + waveform envelopes
 rich>=13.7              # live terminal VU meters + timer
+
+# --- v0.2.0 web UI (the `listen` command) ---
+fastapi>=0.110          # REST + WebSocket server
+uvicorn[standard]>=0.29 # ASGI server
+websockets>=12          # WS transport for live telemetry
 
 # System prerequisites (NOT pip -- install via apt; routing uses these):
 #   PipeWire stack already present (pw-cli, pw-link, pw-loopback, pw-record).

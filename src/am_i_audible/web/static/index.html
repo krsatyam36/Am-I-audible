@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>am-I-audible</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark"></span>
+      <h1>am&#8209;I&#8209;audible</h1>
+      <span class="ver" id="backend-badge">—</span>
+      <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-label">connecting…</span></span>
+    </div>
+    <div class="theme-picker">
+      <label for="theme">Theme</label>
+      <select id="theme">
+        <option value="dark">Dark</option>
+        <option value="light">Light</option>
+        <option value="midnight">Midnight</option>
+        <option value="solarized">Solarized</option>
+        <option value="forest">Forest</option>
+        <option value="contrast">High Contrast</option>
+      </select>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="panel controls">
+      <div class="rec-state">
+        <span class="rec-led" id="rec-led"></span>
+        <span id="rec-label">IDLE</span>
+      </div>
+      <div class="timer" id="timer">00:00:00</div>
+      <div class="total" id="total">total recorded · 00:00:00</div>
+
+      <button class="record-btn" id="start-stop">
+        <span class="ico"></span><span id="rec-btn-text">Start recording</span>
+      </button>
+
+      <div class="toggles">
+        <label class="switch">Microphone track <input type="checkbox" id="t-mic" checked /></label>
+        <label class="switch">System audio track <input type="checkbox" id="t-sys" checked /></label>
+      </div>
+
+      <div class="field">
+        <label for="mic-select">Microphone · gapless swap</label>
+        <select id="mic-select"></select>
+      </div>
+
+      <p class="hint">Close this tab while recording and it <b>keeps running</b> —
+        reopen the URL to return. Use <b>Exit &amp; save</b> (bottom&#8209;right) to stop.</p>
+    </section>
+
+    <section class="scopes" id="scopes"><!-- waveform cards injected per track --></section>
+  </main>
+
+  <button class="exit" id="exit-btn">⏻ Exit &amp; save</button>
+
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal">
+      <h2>Save recording</h2>
+      <p>Name this session, or leave blank to keep the timestamp.</p>
+      <input type="text" id="save-name" placeholder="e.g. petasys-standup" />
+      <div class="modal-actions">
+        <button class="btn ghost" id="cancel-exit">Cancel</button>
+        <button class="btn primary" id="confirm-exit">Save &amp; quit</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

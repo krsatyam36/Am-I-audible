@@ -21,15 +21,18 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v0.1.0 — Dual-track capture, complete and working end-to-end.**
+**v0.2.0 — Web UI with live waveform telemetry, plus dual-track capture.**
 - Virtual sink creation (system + mic on **separate** tracks)
 - Audio routing via PipeWire-native (`pw-loopback` + `pw-link`) or PulseAudio (`pactl`), auto-detected
 - Gapless microphone hot-swap (new route created before old one is destroyed)
 - Dual-track recording to 48 kHz/16-bit mono WAV, one `pw-record` per track streamed to disk (flushed per chunk; kernel-buffered, no dropouts)
+- **Web UI** (`listen` command) — FastAPI + WebSocket server with live waveform scopes, VU meters, mic swap, and session management
+- **Waveform envelope tracking** — peak-per-window (~10 ms) envelope buffered per track, drained by the UI for real-time scope rendering
+- **CaptureController** — thread-safe stateful wrapper around AudioRouter + DualTrackRecorder, powering both the terminal and web interfaces
 - Live terminal **VU meters + elapsed timer** (the real-time "am I audible?" check)
 - Bulletproof cleanup (context manager + `atexit` + SIGINT/SIGTERM handlers)
 
-**Coming next (v0.2.0):** local STT with `faster-whisper` → timestamped Markdown. **v0.3.0:** `pyannote` speaker diarization.
+**Coming next (v0.3.0):** local STT with `faster-whisper` → timestamped Markdown. **v0.4.0:** `pyannote` speaker diarization.
 
 ## System Prerequisites
 
@@ -49,7 +52,7 @@ cd am-i-audible
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies (audio capture; STT deferred to v0.2.0)
+# Install dependencies (audio capture + web UI)
 pip install -r requirements.txt
 ```
 
@@ -61,6 +64,7 @@ PYTHONPATH=src python3 -m am_i_audible record --label standup
 PYTHONPATH=src python3 -m am_i_audible record --duration 1800   # stop after 30 min
 PYTHONPATH=src python3 -m am_i_audible record --mic-only         # or --system-only
 PYTHONPATH=src python3 -m am_i_audible devices           # show backend + audio sources
+listen                          # launch the web UI (FastAPI + live waveforms)
 ```
 
 While recording, the terminal shows a live VU meter per track plus an elapsed timer:
@@ -90,7 +94,7 @@ recorded-audio/
 ├── 2026-06-21_0930_standup/
 │   ├── mic.wav        # microphone track (48 kHz, 16-bit mono)
 │   └── system.wav     # system audio track (48 kHz, 16-bit mono)
-└── generated_transcripts/   # populated from v0.2.0
+└── generated_transcripts/   # populated from v0.3.0
 ```
 
 Both `recorded-audio/` and `generated_transcripts/` are git-ignored — recordings stay local.
@@ -102,7 +106,7 @@ Physical mic ──loopback──► [null sink am_i_audible_mic] ──► .mon
 Default out  ──loopback──► [null sink am_i_audible_sys]  ──► .monitor ──► pw-record ──► system.wav
 ```
 
-Capture and processing are deliberately **decoupled**: v0.1.0 records pristine lossless audio with almost no CPU, and STT/diarization (v0.2.0+) run later as a GPU batch pass over the saved files — so a recording never drops a frame, and you can re-transcribe anytime with a bigger model.
+Capture and processing are deliberately **decoupled**: v0.2.0 records pristine lossless audio with almost no CPU, and STT/diarization (v0.3.0+) run later as a GPU batch pass over the saved files — so a recording never drops a frame, and you can re-transcribe anytime with a bigger model.
 
 - **Backend-agnostic**: All `pactl`/`pw-*` commands live in `backends.py` behind a single `Handle` abstraction and one mockable `_run()` seam.
 - **Gapless hot-swap**: `swap_mic()` creates the new mic loopback before destroying the old one — the mic sink's monitor never goes silent.
@@ -112,8 +116,8 @@ Capture and processing are deliberately **decoupled**: v0.1.0 records pristine l
 
 ```
 am-i-audible/
-├── pyproject.toml              # Package metadata + console entry point
-├── requirements.txt            # Capture-only deps
+├── pyproject.toml              # Package metadata + console entry points
+├── requirements.txt            # Runtime deps (capture + web UI)
 ├── src/
 │   └── am_i_audible/
 │       ├── __init__.py         # Version
@@ -123,11 +127,19 @@ am-i-audible/
 │       ├── audio/
 │       │   ├── backends.py     # PactlBackend, PipeWireBackend, detect_backend()
 │       │   ├── router.py       # AudioRouter: setup / swap_mic / teardown
-│       │   └── recorder.py     # DualTrackRecorder: pw-record → WAV + RMS levels
+│       │   └── recorder.py     # DualTrackRecorder: pw-record → WAV + RMS + waveform envelope
 │       ├── ui/
 │       │   └── meters.py       # Live VU meters + timer (rich)
-│       └── core/
-│           └── session.py      # Recording lifecycle: start/stop/swap
+│       ├── core/
+│       │   ├── session.py      # Terminal recording lifecycle: start/stop/swap
+│       │   └── controller.py   # Thread-safe CaptureController for the web UI
+│       └── web/
+│           ├── __init__.py     # Web UI package
+│           ├── server.py       # FastAPI + WebSocket server (`listen` command)
+│           └── static/         # Frontend assets
+│               ├── index.html  # Main UI layout
+│               ├── style.css   # Multi-theme CSS (dark/light/midnight/solarized/forest/contrast)
+│               └── app.js      # Live waveform scopes, mic swap, session controls
 ├── tests/test_router.py        # Router unit tests (stdlib unittest)
 ├── docs/
 └── .gitignore

@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import threading
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +29,9 @@ from am_i_audible import config
 log = logging.getLogger(__name__)
 
 _FULL_SCALE = 32768.0  # s16
+# Waveform envelope resolution: one peak per ~10 ms window.
+_ENV_WINDOW_FRAMES = 480
+_ENV_MAXLEN = 6000  # ~60 s of backlog if nothing drains
 
 
 class CaptureError(RuntimeError):
@@ -46,8 +50,12 @@ class TrackCapture:
         self._file: sf.SoundFile | None = None
         self._stop = threading.Event()
         self._level = 0.0          # latest RMS, 0..1
+        self._peak = 0.0           # latest window peak, 0..1
         self._frames_written = 0
         self._error: Exception | None = None
+        # Waveform envelope: peak-per-window points awaiting the UI to drain.
+        self._env: deque[float] = deque(maxlen=_ENV_MAXLEN)
+        self._env_lock = threading.Lock()
 
     # -- public API -------------------------------------------------------- #
     @property
@@ -55,8 +63,19 @@ class TrackCapture:
         return self._level
 
     @property
+    def peak(self) -> float:
+        return self._peak
+
+    @property
     def seconds(self) -> float:
         return self._frames_written / config.SAMPLE_RATE
+
+    def drain_envelope(self) -> list[float]:
+        """Return and clear the peak-per-window points buffered since last call."""
+        with self._env_lock:
+            points = list(self._env)
+            self._env.clear()
+        return points
 
     @property
     def error(self) -> Exception | None:
@@ -112,12 +131,23 @@ class TrackCapture:
                 self._file.write(samples)
                 self._file.flush()
                 self._frames_written += samples.size
-                self._level = float(
-                    np.sqrt(np.mean((samples.astype(np.float32) / _FULL_SCALE) ** 2))
-                ) if samples.size else 0.0
+                if samples.size:
+                    norm = samples.astype(np.float32) / _FULL_SCALE
+                    self._level = float(np.sqrt(np.mean(norm ** 2)))
+                    self._peak = float(np.max(np.abs(norm)))
+                    self._append_envelope(norm)
         except Exception as exc:  # surface to the session without killing it
             self._error = exc
             log.error("capture[%s] failed: %s", self.name, exc)
+
+    def _append_envelope(self, norm: np.ndarray) -> None:
+        """Append one peak value per ~10 ms window of this chunk."""
+        n = norm.size // _ENV_WINDOW_FRAMES
+        if n:
+            windows = norm[: n * _ENV_WINDOW_FRAMES].reshape(n, _ENV_WINDOW_FRAMES)
+            peaks = np.max(np.abs(windows), axis=1)
+            with self._env_lock:
+                self._env.extend(float(p) for p in peaks)
 
 
 class DualTrackRecorder:
