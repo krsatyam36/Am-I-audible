@@ -138,8 +138,9 @@ class PipeWireBackend:
         return self._inspect_default("@DEFAULT_AUDIO_SINK@")
 
     def monitor_of(self, sink_name: str) -> str:
-        # We name the loopback's playback (source) end explicitly on creation.
-        return f"{sink_name}.monitor"
+        if sink_name.startswith(config.OBJECT_PREFIX):
+            return f"{sink_name}.monitor"
+        return sink_name
 
     def list_sources(self) -> list[str]:
         # Best-effort via pw-dump JSON; empty list if unavailable.
@@ -178,9 +179,16 @@ class PipeWireBackend:
         return Handle(kind="process", payload=proc, label=f"sink:{name}")
 
     def route(self, source_name: str, sink_name: str) -> Handle:
-        # Link all matching channels by node name; pw-link pairs ports positionally.
-        _run(["pw-link", source_name, sink_name], check=False)
-        log.info("pipewire: linked %s -> %s", source_name, sink_name)
+        # Enumerate output ports of the source and input ports of the sink,
+        # then link them 1:1 positionally.
+        outputs = [p for p in _run(["pw-link", "-o"]).splitlines()
+                   if p.startswith(f"{source_name}:")]
+        inputs = [p for p in _run(["pw-link", "-i"]).splitlines()
+                  if p.startswith(f"{sink_name}:")]
+        n = min(len(outputs), len(inputs))
+        for i in range(n):
+            _run(["pw-link", outputs[i], inputs[i]], check=False)
+        log.info("pipewire: linked %d port(s) %s -> %s", n, source_name, sink_name)
         return Handle(kind="link", payload=(source_name, sink_name),
                       label=f"link:{source_name}->{sink_name}")
 

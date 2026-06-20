@@ -126,6 +126,10 @@ class AudioRouter:
     def backend_name(self) -> str:
         return self._backend.name
 
+    @property
+    def current_mic(self) -> str | None:
+        return self._current_mic_source
+
     def list_microphones(self) -> list[str]:
         """Candidate mic sources for hot-swap (excludes our own objects)."""
         return [s for s in self._backend.list_sources()

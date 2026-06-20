@@ -21,14 +21,15 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v0.1.0 — Audio routing layer complete.** The foundation is built and tested:
-- Virtual sink creation (system + mic on separate tracks)
-- Audio routing via PipeWire-native (`pw-loopback` + `pw-link`) or PulseAudio (`pactl`)
+**v0.1.0 — Dual-track capture, complete and working end-to-end.**
+- Virtual sink creation (system + mic on **separate** tracks)
+- Audio routing via PipeWire-native (`pw-loopback` + `pw-link`) or PulseAudio (`pactl`), auto-detected
 - Gapless microphone hot-swap (new route created before old one is destroyed)
+- Dual-track recording to 48 kHz/16-bit mono WAV, one `pw-record` per track streamed to disk (flushed per chunk; kernel-buffered, no dropouts)
+- Live terminal **VU meters + elapsed timer** (the real-time "am I audible?" check)
 - Bulletproof cleanup (context manager + `atexit` + SIGINT/SIGTERM handlers)
-- Backend auto-detection (prefers `pactl`, falls back to PipeWire)
 
-**Coming next:** `recorder.py` (incremental WAV capture), `meters.py` (VU meters), `session.py` (session management), and `cli.py` (terminal UI).
+**Coming next (v0.2.0):** local STT with `faster-whisper` → timestamped Markdown. **v0.3.0:** `pyannote` speaker diarization.
 
 ## System Prerequisites
 
@@ -52,40 +53,56 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Quick Test — Audio Routing
-
-The routing layer can be tested standalone — it only uses stdlib, zero pip dependencies needed:
+## Usage
 
 ```bash
-PYTHONPATH=src python3 -m am_i_audible.audio.router
+PYTHONPATH=src python3 -m am_i_audible record            # record until [q] / Ctrl-C
+PYTHONPATH=src python3 -m am_i_audible record --label standup
+PYTHONPATH=src python3 -m am_i_audible record --duration 1800   # stop after 30 min
+PYTHONPATH=src python3 -m am_i_audible record --mic-only         # or --system-only
+PYTHONPATH=src python3 -m am_i_audible devices           # show backend + audio sources
 ```
 
-This creates both virtual sinks (`am_i_audible_mic` and `am_i_audible_sys`), routes your default mic and system audio into them, and prints the monitor source names. In another terminal:
+While recording, the terminal shows a live VU meter per track plus an elapsed timer:
 
-```bash
-wpctl status                              # see the sinks
-pw-record --target am_i_audible_sys.monitor /tmp/sys.wav   # capture system audio
-pw-record --target am_i_audible_mic.monitor /tmp/mic.wav   # capture microphone
+```
+● REC 00:12:43   mic: alsa_input.pci-0000_05_00.6.analog-stereo
+
+    mic  ████████████░░░░░░░░░░░░░░░░░░ -18.4 dB
+ system  ██████████████████░░░░░░░░░░░░  -6.2 dB
+
+[s] swap mic   [q]/Ctrl-C stop
 ```
 
-Press **Enter** in the first terminal to tear down — all sinks are destroyed cleanly.
+Press **`s`** then Enter to hot-swap the microphone mid-recording (e.g. internal → headset) **without losing a single sample** — the recorder reads from a stable virtual-sink monitor, so only the upstream route changes. Press **`q`** or Ctrl-C to stop; both WAV headers are finalised and a summary is printed.
+
+> Want to test routing in isolation (stdlib only, no recording)? Run
+> `PYTHONPATH=src python3 -m am_i_audible.audio.router` and verify with
+> `wpctl status` / `pw-record` in another terminal.
 
 ## Output Layout
 
-Recordings are stored in `~/Recordings/am-i-audible/`:
+Each session is saved to its own timestamped folder under `recorded-audio/`
+(override with `$AMIA_RECORDINGS_DIR`):
 
 ```
-~/Recordings/am-i-audible/
-├── mic.wav           # microphone track (48 kHz, 16-bit mono)
-└── system.wav        # system audio track (48 kHz, 16-bit mono)
+recorded-audio/
+├── 2026-06-21_0930_standup/
+│   ├── mic.wav        # microphone track (48 kHz, 16-bit mono)
+│   └── system.wav     # system audio track (48 kHz, 16-bit mono)
+└── generated_transcripts/   # populated from v0.2.0
 ```
+
+Both `recorded-audio/` and `generated_transcripts/` are git-ignored — recordings stay local.
 
 ## Architecture
 
 ```
-Physical mic ──loopback──► [null sink am_i_audible_mic] ──► .monitor ──► mic.wav
-Default out  ──loopback──► [null sink am_i_audible_sys]  ──► .monitor ──► system.wav
+Physical mic ──loopback──► [null sink am_i_audible_mic] ──► .monitor ──► pw-record ──► mic.wav
+Default out  ──loopback──► [null sink am_i_audible_sys]  ──► .monitor ──► pw-record ──► system.wav
 ```
+
+Capture and processing are deliberately **decoupled**: v0.1.0 records pristine lossless audio with almost no CPU, and STT/diarization (v0.2.0+) run later as a GPU batch pass over the saved files — so a recording never drops a frame, and you can re-transcribe anytime with a bigger model.
 
 - **Backend-agnostic**: All `pactl`/`pw-*` commands live in `backends.py` behind a single `Handle` abstraction and one mockable `_run()` seam.
 - **Gapless hot-swap**: `swap_mic()` creates the new mic loopback before destroying the old one — the mic sink's monitor never goes silent.
@@ -100,14 +117,19 @@ am-i-audible/
 ├── src/
 │   └── am_i_audible/
 │       ├── __init__.py         # Version
-│       ├── __main__.py         # Entry point (points to router test harness for now)
+│       ├── __main__.py         # `python -m am_i_audible`
+│       ├── cli.py              # argparse CLI: record / devices
 │       ├── config.py           # Sample rate, sink names, output paths
-│       └── audio/
-│           ├── __init__.py
-│           ├── backends.py     # PactlBackend, PipeWireBackend, detect_backend()
-│           └── router.py       # AudioRouter: setup / swap_mic / teardown
-├── tests/                      # (scaffolded)
-├── docs/                       # (scaffolded)
+│       ├── audio/
+│       │   ├── backends.py     # PactlBackend, PipeWireBackend, detect_backend()
+│       │   ├── router.py       # AudioRouter: setup / swap_mic / teardown
+│       │   └── recorder.py     # DualTrackRecorder: pw-record → WAV + RMS levels
+│       ├── ui/
+│       │   └── meters.py       # Live VU meters + timer (rich)
+│       └── core/
+│           └── session.py      # Recording lifecycle: start/stop/swap
+├── tests/test_router.py        # Router unit tests (stdlib unittest)
+├── docs/
 └── .gitignore
 ```
 
