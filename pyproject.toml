@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "am-i-audible"
-version = "0.1.0"
+version = "0.2.0"
 description = "Linux-native dual-audio capture + transcription pipeline for meetings"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,10 +13,17 @@ dependencies = [
     "soundfile>=0.12.1",
     "numpy>=1.26",
     "rich>=13.7",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "websockets>=12",
 ]
 
 [project.scripts]
+listen = "am_i_audible.web.server:main"
 am-i-audible = "am_i_audible.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+am_i_audible = ["web/static/*"]
