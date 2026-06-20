@@ -1,0 +1,90 @@
+# ---------------------------------------------------------------------------
+# Private data -- NEVER push recordings or transcripts to GitHub
+# ---------------------------------------------------------------------------
+recorded-audio/
+recorded-audio/generated_transcripts/
+
+# Stray audio/transcript artifacts anywhere in the tree (belt-and-suspenders)
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ogg
+*.opus
+*.aac
+
+# Local scratch transcripts / exports
+*.srt
+*.vtt
+transcripts/
+*-transcript.md
+*-transcript.txt
+
+# ---------------------------------------------------------------------------
+# Secrets / personal config
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.secret
+*.key
+*.pem
+# Hugging Face token used by pyannote (v0.3.0) -- keep out of git
+.hf_token
+huggingface_token*
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+develop-eggs/
+.installed.cfg
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / coverage / type-checkers
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ---------------------------------------------------------------------------
+# Local STT/diarization model caches (large; download locally, don't commit)
+# ---------------------------------------------------------------------------
+models/
+*.bin
+*.pt
+*.ckpt
+*.onnx
+.cache/
+
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Logs / runtime
+# ---------------------------------------------------------------------------
+*.log
+logs/
