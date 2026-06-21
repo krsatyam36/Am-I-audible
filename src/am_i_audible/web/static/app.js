@@ -177,8 +177,12 @@ connect();
 
 // ---- record controls -----------------------------------------------------
 $("start-stop").addEventListener("click", async () => {
-  if (isRec()) { await api("/api/stop", {}); toast("Stopped"); }
-  else {
+  if (isRec()) {
+    setState("idle");                       // update UI instantly, don't wait
+    const r = await api("/api/stop", {});
+    applyStatus(r);
+    toast(r.saved ? "Saved to History" : "Stopped");
+  } else {
     maxSeconds = 0; transcriptEmpty = true;
     $("transcript").innerHTML = `<p class="empty">Listening…</p>`;
     const st = await api("/api/start", {
