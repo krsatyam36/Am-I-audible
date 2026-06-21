@@ -108,19 +108,19 @@
     <div class="modal">
       <h2>Settings</h2>
       <label class="switch">Transcribe by default <input type="checkbox" id="s-transcribe" /></label>
-      <div class="field"><label for="s-model">Whisper model</label>
-        <select id="s-model">
-          <option value="tiny">tiny — fastest</option>
-          <option value="base">base — balanced</option>
-          <option value="small">small — accurate</option>
-          <option value="medium">medium — best (slow)</option>
-        </select></div>
+      <div class="field"><label for="s-engine">STT engine</label>
+        <select id="s-engine"></select></div>
+      <div class="field"><label for="s-model">Model</label>
+        <select id="s-model"></select></div>
       <div class="field"><label for="s-language">Language (blank = auto-detect)</label>
         <input type="text" id="s-language" placeholder="en, hi, …" /></div>
       <div class="field"><label for="s-window">Transcription window (seconds)</label>
         <input type="text" id="s-window" placeholder="5" /></div>
       <label class="switch">Speaker diarization (split “Others”) <input type="checkbox" id="s-diarize" /></label>
+      <label class="switch">High-accuracy re-pass on exit <input type="checkbox" id="s-finalize" checked /></label>
       <p class="hint" id="stt-availability"></p>
+      <p class="hint">Tip: the live transcript is a fast preview (chunked). The <b>saved</b>
+        transcript is re-done whole-file on exit for accuracy — pick <b>large-v3-turbo</b>.</p>
       <div class="modal-actions">
         <button class="btn ghost" id="cancel-settings">Cancel</button>
         <button class="btn primary" id="save-settings">Save</button>
