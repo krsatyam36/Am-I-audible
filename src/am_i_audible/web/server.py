@@ -70,7 +70,7 @@ def create_app(state: AppState) -> FastAPI:
         return ctrl.start(record_mic=body.get("recordMic", True),
                           record_system=body.get("recordSystem", True),
                           label=body.get("label"),
-                          transcribe_live=body.get("transcribe"))
+                          mode=body.get("mode", "live"))
 
     @app.post("/api/pause")
     async def pause():

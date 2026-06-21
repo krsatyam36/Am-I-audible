@@ -90,11 +90,11 @@ function setState(s) {
   state = s; const rec = isRec();
   $("rec-led").classList.toggle("live", s === "recording");
   $("rec-label").textContent = s.toUpperCase();
-  $("rec-btn-text").textContent = rec ? "Stop" : "Start recording";
-  $("start-stop").classList.toggle("recording", rec);
+  $("start-buttons").hidden = rec;
+  $("stop-btn").hidden = !rec;
   $("live-controls").hidden = !rec;
   $("pause-btn").textContent = s === "paused" ? "▶ Resume" : "⏸ Pause";
-  for (const id of ["t-mic", "t-sys", "t-stt"]) $(id).disabled = rec;
+  for (const id of ["t-mic", "t-sys"]) $(id).disabled = rec;
 }
 
 function renderGains(tracks, gains) {
@@ -130,7 +130,7 @@ function applyStatus(st) {
   ensureScopes(st.tracks && st.tracks.length ? st.tracks : ["mic", "system"]);
   renderGains(st.tracks, st.gains);
   $("marker-count").textContent = (st.markers || []).length;
-  if (st.settings) { lastSettings = st.settings; $("t-stt").checked = !!st.settings.transcribe; }
+  if (st.settings) lastSettings = st.settings;
   const sttEl = $("stt-status");
   if (st.sttError) sttEl.textContent = "unavailable";
   else if (st.sttDevice) sttEl.textContent = "on · " + st.sttDevice;
@@ -176,19 +176,26 @@ function connect() {
 connect();
 
 // ---- record controls -----------------------------------------------------
-$("start-stop").addEventListener("click", async () => {
-  if (isRec()) {
-    setState("idle");                       // update UI instantly, don't wait
-    const r = await api("/api/stop", {});
-    applyStatus(r);
-    toast(r.saved ? "Saved to History" : "Stopped");
-  } else {
-    maxSeconds = 0; transcriptEmpty = true;
-    $("transcript").innerHTML = `<p class="empty">Listening…</p>`;
-    const st = await api("/api/start", {
-      recordMic: $("t-mic").checked, recordSystem: $("t-sys").checked, transcribe: $("t-stt").checked });
-    applyStatus(st); toast(st.sttError && $("t-stt").checked ? "Recording (STT unavailable)" : "Recording…");
-  }
+async function startRecording(mode) {
+  maxSeconds = 0; transcriptEmpty = true;
+  $("transcript").innerHTML = mode === "later"
+    ? `<p class="empty">Recording… transcription runs automatically when you stop.</p>`
+    : `<p class="empty">Listening…</p>`;
+  const st = await api("/api/start", {
+    recordMic: $("t-mic").checked, recordSystem: $("t-sys").checked, mode });
+  applyStatus(st);
+  toast(mode === "later" ? "Recording (transcribe after stop)"
+                         : (st.sttError ? "Recording (STT unavailable)" : "Recording + live transcript"));
+}
+$("start-live").addEventListener("click", () => startRecording("live"));
+$("start-later").addEventListener("click", () => startRecording("later"));
+$("stop-btn").addEventListener("click", async () => {
+  setState("idle");                         // update UI instantly, don't wait
+  const r = await api("/api/stop", {});
+  applyStatus(r);
+  if (r.transcribing && r.mode === "later")
+    toast("Transcribing in the background — you'll get a notification when ready", 4500);
+  else toast(r.saved ? "Saved to History" : "Stopped");
 });
 $("pause-btn").addEventListener("click", async () => {
   applyStatus(await api(state === "paused" ? "/api/resume" : "/api/pause", {}));
@@ -244,7 +251,6 @@ $("open-settings").addEventListener("click", async () => {
   }
   populateModels(esel.value, s.model);
   showEngineAvailability();
-  $("s-transcribe").checked = !!s.transcribe;
   $("s-language").value = s.language || ""; $("s-window").value = s.window || 5;
   $("s-diarize").checked = !!s.diarize; $("s-diarize").disabled = !s.diarizeAvailable;
   $("s-finalize").checked = s.finalizeRepass !== false;
@@ -256,11 +262,9 @@ $("s-engine").addEventListener("change", () => {
 $("cancel-settings").addEventListener("click", () => ($("settings-modal").hidden = true));
 $("save-settings").addEventListener("click", async () => {
   await api("/api/settings", {
-    transcribe: $("s-transcribe").checked, engine: $("s-engine").value,
-    model: $("s-model").value,
+    engine: $("s-engine").value, model: $("s-model").value,
     language: $("s-language").value.trim(), window: parseFloat($("s-window").value) || 5,
     diarize: $("s-diarize").checked, finalizeRepass: $("s-finalize").checked });
-  $("t-stt").checked = $("s-transcribe").checked;
   $("settings-modal").hidden = true; toast("Settings saved");
 });
 

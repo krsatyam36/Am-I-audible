@@ -141,6 +141,10 @@ select:focus,input[type=text]:focus{border-color:var(--accent);
   box-shadow:0 0 26px color-mix(in srgb,var(--danger) 55%, transparent)}
 .record-btn .ico{width:13px; height:13px; border-radius:50%; background:#fff}
 .record-btn.recording .ico{border-radius:3px}
+#start-buttons{display:flex; flex-direction:column; gap:10px}
+.record-btn.ghost-rec{background:transparent; color:var(--text);
+  border:1px solid var(--stroke-strong); box-shadow:none; font-weight:600; font-size:.92rem}
+.record-btn.ghost-rec:hover{background:color-mix(in srgb,var(--panel-solid) 50%, transparent)}
 
 /* ---- toggles (segmented switches) ---- */
 .toggles{display:flex; flex-direction:column; gap:11px}
