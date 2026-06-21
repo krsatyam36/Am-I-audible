@@ -109,6 +109,15 @@ Press **`s`** then Enter to hot-swap the microphone mid-recording (e.g. internal
 > `PYTHONPATH=src python3 -m am_i_audible.audio.router` and verify with
 > `wpctl status` / `pw-record` in another terminal.
 
+## Transcription accuracy
+
+- The **live** transcript is a fast preview: it runs on blind ~5 s chunks, so it's less accurate.
+- The **saved** transcript is re-done **whole-file on exit** (full context, higher beam) — this is the
+  accurate, LLM-ready output. The same whole-file pass runs from **History → Re-transcribe**.
+- Pick **`large-v3-turbo`** in Settings (near-SOTA, fast on GPU). Set the **language** explicitly to
+  avoid per-chunk mis-detection. Keep mic **gain** low enough to avoid clipping.
+- GPU is used automatically when available (`listen --enable-gpu` installs the CUDA libs).
+
 ## Output Layout
 
 Each session is saved to its own timestamped folder under `recorded-audio/`

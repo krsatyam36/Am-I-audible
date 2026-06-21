@@ -211,23 +211,51 @@ $("confirm-exit").addEventListener("click", async () => {
 });
 
 // ---- settings ------------------------------------------------------------
+let engineList = [];
+function populateModels(engineKey, selected) {
+  const eng = engineList.find((e) => e.key === engineKey);
+  const sel = $("s-model"); sel.innerHTML = "";
+  for (const m of (eng ? eng.models : [])) {
+    const id = typeof m === "string" ? m : m.id;
+    const label = typeof m === "string" ? m : m.label;
+    const o = document.createElement("option"); o.value = id; o.textContent = label;
+    if (id === selected) o.selected = true; sel.appendChild(o);
+  }
+  if (eng && !sel.value && eng.defaultModel) sel.value = eng.defaultModel;
+}
+function showEngineAvailability() {
+  const eng = engineList.find((e) => e.key === $("s-engine").value);
+  $("stt-availability").textContent = !eng ? ""
+    : eng.available ? `${eng.title} ✓ ready`
+    : `${eng.title} not installed — run: ${eng.installHint}`;
+}
 $("open-settings").addEventListener("click", async () => {
   const s = lastSettings || (await apiGet("/api/settings"));
-  $("s-transcribe").checked = !!s.transcribe; $("s-model").value = s.model || "base";
+  engineList = s.engines || [];
+  const esel = $("s-engine"); esel.innerHTML = "";
+  for (const e of engineList) {
+    const o = document.createElement("option"); o.value = e.key;
+    o.textContent = e.title + (e.available ? "" : " (not installed)");
+    if (e.key === (s.engine || "whisper")) o.selected = true; esel.appendChild(o);
+  }
+  populateModels(esel.value, s.model);
+  showEngineAvailability();
+  $("s-transcribe").checked = !!s.transcribe;
   $("s-language").value = s.language || ""; $("s-window").value = s.window || 5;
   $("s-diarize").checked = !!s.diarize; $("s-diarize").disabled = !s.diarizeAvailable;
-  $("stt-availability").textContent = s.sttAvailable
-    ? ("faster-whisper detected." + (s.diarizeAvailable ? " Diarization ready." :
-        " Diarization needs pyannote.audio + HUGGINGFACE_TOKEN."))
-    : "faster-whisper not installed — run: pip install faster-whisper";
+  $("s-finalize").checked = s.finalizeRepass !== false;
   $("settings-modal").hidden = false;
+});
+$("s-engine").addEventListener("change", () => {
+  populateModels($("s-engine").value); showEngineAvailability();
 });
 $("cancel-settings").addEventListener("click", () => ($("settings-modal").hidden = true));
 $("save-settings").addEventListener("click", async () => {
   await api("/api/settings", {
-    transcribe: $("s-transcribe").checked, model: $("s-model").value,
+    transcribe: $("s-transcribe").checked, engine: $("s-engine").value,
+    model: $("s-model").value,
     language: $("s-language").value.trim(), window: parseFloat($("s-window").value) || 5,
-    diarize: $("s-diarize").checked });
+    diarize: $("s-diarize").checked, finalizeRepass: $("s-finalize").checked });
   $("t-stt").checked = $("s-transcribe").checked;
   $("settings-modal").hidden = true; toast("Settings saved");
 });
