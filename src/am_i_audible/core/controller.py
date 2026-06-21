@@ -1,27 +1,31 @@
 """Stateful capture controller driving the web UI.
 
-Wraps :class:`AudioRouter` + :class:`DualTrackRecorder` behind a small,
-thread-safe, call-from-anywhere API the FastAPI server uses:
+Wraps :class:`AudioRouter` + :class:`DualTrackRecorder` (+ optional
+:class:`TranscriptionEngine`) behind a thread-safe, call-from-anywhere API:
 
-    start(...) -> begin a session   status() -> dict for the UI
-    stop(name) -> finalize + rename telemetry() -> live levels + waveform points
-    swap_mic(target) -> gapless mic device switch
-
-Unlike the terminal ``RecordingSession`` (which owns a blocking meter loop), the
-controller is event-driven: the server calls it from request handlers and polls
-``telemetry()`` over a WebSocket.
+    start(...)        begin a session (optionally transcribing)
+    pause()/resume()  hold/continue without ending the session
+    swap_mic(target)  gapless mic device switch
+    set_gain(...)     per-track software gain
+    add_marker(label) drop a timestamped bookmark
+    stop(name)        finalize: WAVs + transcript.md + markers.json, rename folder
+    status()/telemetry()  state for the UI (telemetry also streams transcript deltas)
+    list_sessions()/transcribe_file(...)  session history + re-transcription
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import datetime
 from pathlib import Path
 
 from am_i_audible import config
+from am_i_audible.audio import transcribe
 from am_i_audible.audio.recorder import DualTrackRecorder
 from am_i_audible.audio.router import AudioRouter
+from am_i_audible.audio.transcribe import TranscriptionEngine
 
 log = logging.getLogger(__name__)
 
@@ -31,24 +35,34 @@ class CaptureController:
         self._lock = threading.RLock()
         self._router: AudioRouter | None = None
         self._recorder: DualTrackRecorder | None = None
+        self._stt: TranscriptionEngine | None = None
         self._out_dir: Path | None = None
-        self._state = "idle"  # idle | recording
+        self._state = "idle"  # idle | recording | paused
+        self._markers: list[dict] = []
+        self._pending_segments: list[dict] = []
+        self.settings = {
+            "transcribe": transcribe.available(),
+            "model": config.STT_MODEL,
+            "language": config.STT_LANGUAGE or "",
+            "window": config.STT_WINDOW_SECONDS,
+            "sttAvailable": transcribe.available(),
+        }
 
     # -- queries ----------------------------------------------------------- #
     @property
     def is_recording(self) -> bool:
-        return self._state == "recording"
+        return self._state in ("recording", "paused")
 
     def status(self) -> dict:
         with self._lock:
-            mics = []
-            current_mic = None
+            mics, current_mic = [], None
             if self._router:
                 try:
                     mics = self._router.list_microphones()
                     current_mic = self._router.current_mic
-                except Exception:  # backend hiccup shouldn't crash the UI
+                except Exception:
                     pass
+            gains = {t.name: t.gain for t in self._recorder.tracks} if self._recorder else {}
             return {
                 "state": self._state,
                 "backend": self._router.backend_name if self._router else None,
@@ -57,46 +71,77 @@ class CaptureController:
                 "seconds": self._recorder.seconds if self._recorder else 0.0,
                 "outDir": str(self._out_dir) if self._out_dir else None,
                 "tracks": [t.name for t in self._recorder.tracks] if self._recorder else [],
+                "gains": gains,
+                "markers": self._markers,
+                "settings": self.settings,
+                "sttDevice": self._stt.active_device if self._stt else None,
+                "sttError": self._stt.error if self._stt else None,
             }
 
     def telemetry(self) -> dict:
         with self._lock:
+            new_segments = self._pending_segments
+            self._pending_segments = []
             if not self._recorder:
-                return {"state": self._state, "seconds": 0.0, "tracks": {}}
+                return {"state": self._state, "seconds": 0.0, "tracks": {},
+                        "segments": new_segments}
             return {
                 "state": self._state,
                 "seconds": self._recorder.seconds,
                 "tracks": {
-                    t.name: {
-                        "level": t.level,
-                        "peak": t.peak,
-                        "env": t.drain_envelope(),
-                    }
+                    t.name: {"level": t.level, "peak": t.peak, "env": t.drain_envelope()}
                     for t in self._recorder.tracks
                 },
+                "segments": new_segments,
             }
 
     # -- commands ---------------------------------------------------------- #
     def start(self, *, record_mic: bool = True, record_system: bool = True,
-              label: str | None = None) -> dict:
+              label: str | None = None, transcribe_live: bool | None = None) -> dict:
         with self._lock:
             if self.is_recording:
                 return self.status()
             stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-            self._out_dir = config.RECORDINGS_ROOT / (
-                f"{stamp}_{label}" if label else stamp)
+            self._out_dir = config.RECORDINGS_ROOT / (f"{stamp}_{label}" if label else stamp)
+            self._markers = []
+            self._pending_segments = []
             self._router = AudioRouter()
             routes = self._router.setup()
             self._recorder = DualTrackRecorder(
-                mic_monitor=routes.mic_monitor,
-                system_monitor=routes.system_monitor,
-                out_dir=self._out_dir,
-                record_mic=record_mic,
-                record_system=record_system,
-            )
+                mic_monitor=routes.mic_monitor, system_monitor=routes.system_monitor,
+                out_dir=self._out_dir, record_mic=record_mic, record_system=record_system)
+
+            want_stt = self.settings["transcribe"] if transcribe_live is None else transcribe_live
+            if want_stt and transcribe.available():
+                self._stt = TranscriptionEngine(
+                    on_segment=self._on_segment, model_size=self.settings["model"],
+                    language=self.settings["language"] or None,
+                    window_seconds=float(self.settings["window"]))
+                if self._stt.start():
+                    self._recorder.set_tap(self._stt.feed)
+                else:
+                    self._stt = None
+            else:
+                self._stt = None
+
             self._recorder.start()
             self._state = "recording"
-            log.info("controller: recording -> %s", self._out_dir)
+            log.info("controller: recording -> %s (stt=%s)", self._out_dir,
+                     self._stt.active_device if self._stt else "off")
+            return self.status()
+
+    def pause(self) -> dict:
+        with self._lock:
+            if self._state == "recording" and self._recorder:
+                self._recorder.set_paused(True)
+                self._state = "paused"
+            return self.status()
+
+    def resume(self) -> dict:
+        with self._lock:
+            if self._state == "paused" and self._recorder:
+                self._recorder.set_paused(False)
+                self._state = "recording"
             return self.status()
 
     def swap_mic(self, target: str) -> dict:
@@ -105,35 +150,115 @@ class CaptureController:
                 self._router.swap_mic(target)
             return self.status()
 
+    def set_gain(self, name: str, value: float) -> dict:
+        with self._lock:
+            if self._recorder:
+                self._recorder.set_gain(name, value)
+            return self.status()
+
+    def add_marker(self, label: str | None = None) -> dict:
+        with self._lock:
+            if self._recorder and self.is_recording:
+                self._markers.append({
+                    "t": round(self._recorder.seconds, 2),
+                    "label": (label or f"Marker {len(self._markers) + 1}").strip(),
+                })
+            return self.status()
+
+    def update_settings(self, patch: dict) -> dict:
+        with self._lock:
+            for k in ("transcribe", "model", "language", "window"):
+                if k in patch:
+                    self.settings[k] = patch[k]
+            return self.status()
+
     def stop(self, save_name: str | None = None) -> dict:
         with self._lock:
             if not self.is_recording:
-                return {"saved": None, **self.status()}
+                return {"saved": None, "transcript": None, **self.status()}
             if self._recorder:
+                self._recorder.set_tap(None)
                 self._recorder.stop()
             if self._router:
                 self._router.teardown()
+            segments = self._stt.stop() if self._stt else []
             saved_dir = self._finalize_name(save_name)
+            transcript_path = self._save_artifacts(saved_dir, segments)
             self._state = "idle"
-            self._recorder = None
-            self._router = None
+            self._recorder = self._router = self._stt = None
+            out = {"saved": str(saved_dir) if saved_dir else None,
+                   "transcript": str(transcript_path) if transcript_path else None}
             self._out_dir = None
             log.info("controller: stopped -> %s", saved_dir)
-            return {"saved": str(saved_dir) if saved_dir else None, **self.status()}
+            return {**out, **self.status()}
+
+    # -- session history --------------------------------------------------- #
+    def list_sessions(self) -> list[dict]:
+        root = config.RECORDINGS_ROOT
+        if not root.exists():
+            return []
+        sessions = []
+        for d in sorted(root.iterdir(), reverse=True):
+            if not d.is_dir() or d.name == config.TRANSCRIPTS_ROOT.name:
+                continue
+            wavs = sorted(d.glob("*.wav"))
+            if not wavs:
+                continue
+            size = sum(w.stat().st_size for w in wavs)
+            dur = max((w.stat().st_size / (config.BYTES_PER_FRAME * config.SAMPLE_RATE)
+                       for w in wavs), default=0.0)
+            sessions.append({
+                "name": d.name,
+                "tracks": [w.name for w in wavs],
+                "sizeBytes": size,
+                "seconds": round(dur, 1),
+                "hasTranscript": (d / "transcript.md").exists(),
+                "mtime": int(d.stat().st_mtime),
+            })
+        return sessions
+
+    def transcribe_file(self, name: str) -> dict:
+        """Re-transcribe a past session (blocking; server runs it off-thread)."""
+        session = config.RECORDINGS_ROOT / name
+        wavs = sorted(session.glob("*.wav"))
+        if not wavs:
+            return {"ok": False, "error": "no audio in session"}
+        if not transcribe.available():
+            return {"ok": False, "error": "faster-whisper not installed"}
+        segs = transcribe.transcribe_files(
+            wavs, model_size=self.settings["model"],
+            language=self.settings["language"] or None)
+        path = self._save_artifacts(session, segs)
+        return {"ok": True, "segments": len(segs), "transcript": str(path)}
 
     # -- helpers ----------------------------------------------------------- #
+    def _on_segment(self, item: dict) -> None:
+        with self._lock:
+            self._pending_segments.append(item)
+
     def _finalize_name(self, save_name: str | None) -> Path | None:
-        """Rename the session folder to a user-supplied name, if given/safe."""
-        if not self._out_dir or not self._out_dir.exists():
-            return self._out_dir
-        if not save_name:
+        if not self._out_dir or not self._out_dir.exists() or not save_name:
             return self._out_dir
         safe = "".join(c for c in save_name if c.isalnum() or c in " -_.").strip()
         safe = safe.replace(" ", "_")
         if not safe:
             return self._out_dir
         target = self._out_dir.parent / safe
-        if target.exists():  # avoid clobbering: append the timestamp
+        if target.exists():
             target = self._out_dir.parent / f"{safe}_{self._out_dir.name}"
         self._out_dir.rename(target)
         return target
+
+    def _save_artifacts(self, session_dir: Path | None, segments: list[dict]) -> Path | None:
+        if not session_dir or not session_dir.exists():
+            return None
+        if self._markers:
+            (session_dir / "markers.json").write_text(json.dumps(self._markers, indent=2))
+        if not segments:
+            return None
+        md = transcribe.segments_to_markdown(segments, session_dir.name)
+        (session_dir / "transcript.md").write_text(md)
+        config.TRANSCRIPTS_ROOT.mkdir(parents=True, exist_ok=True)
+        mirror = config.TRANSCRIPTS_ROOT / f"{session_dir.name}.md"
+        mirror.write_text(md)
+        return mirror

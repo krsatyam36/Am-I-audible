@@ -52,3 +52,13 @@ SYSTEM_TRACK_FILENAME = "system.wav"
 
 # --- UI -------------------------------------------------------------------
 METER_REFRESH_HZ = 12
+
+# --- Transcription (v0.2.0 real-time STT) ---------------------------------
+# Model auto-sized for a 4 GB GPU; override with $AMIA_STT_MODEL. "base" is a
+# good speed/accuracy balance; "tiny" for lowest latency, "small" for accuracy.
+STT_MODEL = os.environ.get("AMIA_STT_MODEL", "base")
+STT_DEVICE = os.environ.get("AMIA_STT_DEVICE", "auto")  # auto | cuda | cpu
+STT_LANGUAGE = os.environ.get("AMIA_STT_LANGUAGE") or None  # None = autodetect
+# Seconds of audio per transcription pass. Smaller = lower latency, worse
+# accuracy (Whisper needs context). 5s is a sane near-live default.
+STT_WINDOW_SECONDS = float(os.environ.get("AMIA_STT_WINDOW", "5"))

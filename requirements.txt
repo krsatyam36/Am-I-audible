@@ -9,6 +9,12 @@ fastapi>=0.110          # REST + WebSocket server
 uvicorn[standard]>=0.29 # ASGI server
 websockets>=12          # WS transport for live telemetry
 
+# --- optional: real-time transcription (the `[stt]` extra) ---
+#   pip install faster-whisper        (or: pipx inject am-i-audible faster-whisper)
+#   Runs on CPU by default; uses CUDA automatically if the cuBLAS/cuDNN runtime
+#   is present. Falls back to CPU cleanly if not.
+# faster-whisper>=1.0
+
 # System prerequisites (NOT pip -- install via apt; routing uses these):
 #   PipeWire stack already present (pw-cli, pw-link, pw-loopback, pw-record).
 #   Optional but recommended for the simpler/robust routing backend:

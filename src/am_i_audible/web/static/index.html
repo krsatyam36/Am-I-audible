@@ -4,9 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>am-I-audible</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="icon" href="/static/icon.svg" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
@@ -17,35 +15,43 @@
       <span class="ver" id="backend-badge">—</span>
       <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-label">connecting…</span></span>
     </div>
-    <div class="theme-picker">
-      <label for="theme">Theme</label>
-      <select id="theme">
-        <option value="dark">Dark</option>
-        <option value="light">Light</option>
-        <option value="midnight">Midnight</option>
-        <option value="solarized">Solarized</option>
-        <option value="forest">Forest</option>
-        <option value="contrast">High Contrast</option>
-      </select>
+    <nav class="nav">
+      <button class="nav-btn active" id="nav-record">Record</button>
+      <button class="nav-btn" id="nav-history">History</button>
+    </nav>
+    <div class="top-right">
+      <button class="icon-btn" id="open-settings" title="Settings">⚙</button>
+      <div class="theme-picker">
+        <select id="theme">
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+          <option value="midnight">Midnight</option>
+          <option value="solarized">Solarized</option>
+          <option value="forest">Forest</option>
+          <option value="contrast">High Contrast</option>
+        </select>
+      </div>
     </div>
   </header>
 
-  <main class="grid">
+  <!-- ===================== RECORD VIEW ===================== -->
+  <main class="grid" id="view-record">
     <section class="panel controls">
-      <div class="rec-state">
-        <span class="rec-led" id="rec-led"></span>
-        <span id="rec-label">IDLE</span>
-      </div>
+      <div class="rec-state"><span class="rec-led" id="rec-led"></span><span id="rec-label">IDLE</span></div>
       <div class="timer" id="timer">00:00:00</div>
       <div class="total" id="total">total recorded · 00:00:00</div>
 
-      <button class="record-btn" id="start-stop">
-        <span class="ico"></span><span id="rec-btn-text">Start recording</span>
-      </button>
+      <button class="record-btn" id="start-stop"><span class="ico"></span><span id="rec-btn-text">Start recording</span></button>
+
+      <div class="row" id="live-controls" hidden>
+        <button class="btn" id="pause-btn">⏸ Pause</button>
+        <button class="btn" id="marker-btn">⚑ Marker <span id="marker-count" class="pill">0</span></button>
+      </div>
 
       <div class="toggles">
         <label class="switch">Microphone track <input type="checkbox" id="t-mic" checked /></label>
         <label class="switch">System audio track <input type="checkbox" id="t-sys" checked /></label>
+        <label class="switch">Live transcription <input type="checkbox" id="t-stt" /></label>
       </div>
 
       <div class="field">
@@ -53,15 +59,38 @@
         <select id="mic-select"></select>
       </div>
 
+      <div class="gains" id="gains"></div>
+
       <p class="hint">Close this tab while recording and it <b>keeps running</b> —
-        reopen the URL to return. Use <b>Exit &amp; save</b> (bottom&#8209;right) to stop.</p>
+        reopen to return. Use <b>Exit &amp; save</b> (bottom&#8209;right) to stop.</p>
     </section>
 
-    <section class="scopes" id="scopes"><!-- waveform cards injected per track --></section>
+    <section class="right-col">
+      <div class="scopes" id="scopes"></div>
+      <div class="scope-card transcript-card" id="transcript-card">
+        <div class="scope-head">
+          <span class="name">📝 Live transcript</span>
+          <span class="db" id="stt-status">off</span>
+        </div>
+        <div class="transcript" id="transcript">
+          <p class="empty">Enable “Live transcription” before recording to see text here.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===================== HISTORY VIEW ===================== -->
+  <main class="history" id="view-history" hidden>
+    <div class="history-head">
+      <h2>Recordings</h2>
+      <button class="btn" id="refresh-sessions">↻ Refresh</button>
+    </div>
+    <div id="sessions" class="sessions"></div>
   </main>
 
   <button class="exit" id="exit-btn">⏻ Exit &amp; save</button>
 
+  <!-- Save modal -->
   <div class="modal-backdrop" id="modal" hidden>
     <div class="modal">
       <h2>Save recording</h2>
@@ -70,6 +99,30 @@
       <div class="modal-actions">
         <button class="btn ghost" id="cancel-exit">Cancel</button>
         <button class="btn primary" id="confirm-exit">Save &amp; quit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal-backdrop" id="settings-modal" hidden>
+    <div class="modal">
+      <h2>Settings</h2>
+      <label class="switch">Transcribe by default <input type="checkbox" id="s-transcribe" /></label>
+      <div class="field"><label for="s-model">Whisper model</label>
+        <select id="s-model">
+          <option value="tiny">tiny — fastest</option>
+          <option value="base">base — balanced</option>
+          <option value="small">small — accurate</option>
+          <option value="medium">medium — best (slow)</option>
+        </select></div>
+      <div class="field"><label for="s-language">Language (blank = auto-detect)</label>
+        <input type="text" id="s-language" placeholder="en, hi, …" /></div>
+      <div class="field"><label for="s-window">Transcription window (seconds)</label>
+        <input type="text" id="s-window" placeholder="5" /></div>
+      <p class="hint" id="stt-availability"></p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="cancel-settings">Cancel</button>
+        <button class="btn primary" id="save-settings">Save</button>
       </div>
     </div>
   </div>

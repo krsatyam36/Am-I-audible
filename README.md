@@ -21,18 +21,23 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v0.2.0 — Web UI with live waveform telemetry, plus dual-track capture.**
-- Virtual sink creation (system + mic on **separate** tracks)
-- Audio routing via PipeWire-native (`pw-loopback` + `pw-link`) or PulseAudio (`pactl`), auto-detected
-- Gapless microphone hot-swap (new route created before old one is destroyed)
-- Dual-track recording to 48 kHz/16-bit mono WAV, one `pw-record` per track streamed to disk (flushed per chunk; kernel-buffered, no dropouts)
-- **Web UI** (`listen` command) — FastAPI + WebSocket server with live waveform scopes, VU meters, mic swap, and session management
-- **Waveform envelope tracking** — peak-per-window (~10 ms) envelope buffered per track, drained by the UI for real-time scope rendering
-- **CaptureController** — thread-safe stateful wrapper around AudioRouter + DualTrackRecorder, powering both the terminal and web interfaces
-- Live terminal **VU meters + elapsed timer** (the real-time "am I audible?" check)
-- Bulletproof cleanup (context manager + `atexit` + SIGINT/SIGTERM handlers)
+**v0.2.0 — Full web app (`listen`) with dual-track capture + real-time transcription.**
 
-**Coming next (v0.3.0):** local STT with `faster-whisper` → timestamped Markdown. **v0.4.0:** `pyannote` speaker diarization.
+Capture & routing
+- Virtual sink creation (system + mic on **separate** tracks), auto-detected backend (PipeWire-native or `pactl`)
+- Gapless microphone hot-swap (new route created before old one is destroyed)
+- Dual-track recording to 48 kHz/16-bit mono WAV via one `pw-record` per track (kernel-buffered, no dropouts)
+
+Web UI — one command: **`listen`**
+- Launches a local FastAPI + WebSocket server and auto-opens the browser
+- Modern themed dashboard (6 themes), live **scrolling waveforms** + VU/dB meters per source
+- **Real-time transcription** (faster-whisper, auto CPU/GPU, model picker) streaming into a live transcript pane; Markdown saved on exit to `generated_transcripts/`
+- Controls: start/stop, **pause/resume**, **per-track gain**, **timestamped markers**, gapless **mic swap**, mic/system track toggles
+- **Session history**: browse past recordings, in-browser playback, download, and (re)transcribe
+- **Save-on-exit** with custom name; tab-close rule (recording survives an accidental tab close; idle close quits)
+- App-drawer launcher: `listen --install-desktop`
+
+**Coming next (v0.3.0):** `pyannote` speaker diarization (who-said-what). **v1.0.0:** packaged desktop app.
 
 ## System Prerequisites
 
@@ -58,13 +63,28 @@ pip install -r requirements.txt
 
 ## Usage
 
+### Web app (recommended)
+
+```bash
+pipx install -e .            # one-time: installs the global `listen` command
+pipx inject am-i-audible faster-whisper   # optional: enables transcription
+listen                       # launch the dashboard (auto-opens your browser)
+listen --install-desktop     # add an "am-I-audible" entry to your app drawer
+listen --no-browser --port 8800   # headless / fixed port
+```
+
+In the dashboard: toggle tracks + live transcription, hit **Start**, watch the waveforms
+and transcript, drop **markers**, **pause/resume**, adjust **gain**, **swap the mic** gaplessly,
+then **Exit & save** (bottom-right) with a custom name. The **History** tab plays back, downloads,
+and re-transcribes past recordings.
+
+### Terminal (no UI)
+
 ```bash
 PYTHONPATH=src python3 -m am_i_audible record            # record until [q] / Ctrl-C
-PYTHONPATH=src python3 -m am_i_audible record --label standup
-PYTHONPATH=src python3 -m am_i_audible record --duration 1800   # stop after 30 min
-PYTHONPATH=src python3 -m am_i_audible record --mic-only         # or --system-only
-PYTHONPATH=src python3 -m am_i_audible devices           # show backend + audio sources
-listen                          # launch the web UI (FastAPI + live waveforms)
+PYTHONPATH=src python3 -m am_i_audible record --label standup --duration 1800
+PYTHONPATH=src python3 -m am_i_audible record --mic-only   # or --system-only
+PYTHONPATH=src python3 -m am_i_audible devices            # show backend + audio sources
 ```
 
 While recording, the terminal shows a live VU meter per track plus an elapsed timer:
