@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +51,16 @@ def _free_gpu() -> None:
         pass
 
 
+def _notify(title: str, body: str) -> None:
+    """Fire a Linux desktop notification (best-effort)."""
+    if shutil.which("notify-send"):
+        try:
+            subprocess.run(["notify-send", "-a", "am-I-audible", title, body],
+                           check=False, capture_output=True)
+        except Exception:
+            pass
+
+
 class CaptureController:
     def __init__(self):
         self._lock = threading.RLock()
@@ -57,6 +69,7 @@ class CaptureController:
         self._stt: TranscriptionEngine | None = None
         self._out_dir: Path | None = None
         self._state = "idle"  # idle | recording | paused
+        self._mode = "live"   # live | later
         self._markers: list[dict] = []
         self._pending_segments: list[dict] = []
         self.settings = {
@@ -130,10 +143,11 @@ class CaptureController:
 
     # -- commands ---------------------------------------------------------- #
     def start(self, *, record_mic: bool = True, record_system: bool = True,
-              label: str | None = None, transcribe_live: bool | None = None) -> dict:
+              label: str | None = None, mode: str = "live") -> dict:
         with self._lock:
             if self.is_recording:
                 return self.status()
+            self._mode = "later" if mode == "later" else "live"
             stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
             self._out_dir = config.RECORDINGS_ROOT / (f"{stamp}_{label}" if label else stamp)
             self._markers = []
@@ -151,19 +165,21 @@ class CaptureController:
             self._recorder.start()
             self._state = "recording"
 
-            want_stt = self.settings["transcribe"] if transcribe_live is None else transcribe_live
-            if want_stt and transcribe.available(self.settings["engine"]):
+            # LIVE mode runs a fast, small model for a snappy preview; the accurate
+            # whole-file transcript is produced in the background on stop. RECORD-ONLY
+            # ("later") skips live STT entirely and transcribes after stop.
+            if self._mode == "live" and transcribe.available(self.settings["engine"]):
                 labels = {t.name: _speaker_label(t.name) for t in self._recorder.tracks}
                 self._stt = TranscriptionEngine(
                     labels=labels, on_segment=self._on_segment,
-                    model_size=self.settings["model"],
+                    model_size=config.STT_LIVE_MODEL,
                     language=self.settings["language"] or None,
-                    window_seconds=float(self.settings["window"]),
+                    window_seconds=config.STT_LIVE_WINDOW_SECONDS,
                     engine=self.settings["engine"])
                 threading.Thread(target=self._load_stt, name="stt-load",
                                  daemon=True).start()
 
-            log.info("controller: recording -> %s", self._out_dir)
+            log.info("controller: recording (%s) -> %s", self._mode, self._out_dir)
             return self.status()
 
     def _load_stt(self) -> None:
@@ -235,17 +251,22 @@ class CaptureController:
             # The high-accuracy whole-file re-pass runs in the background so Stop
             # never freezes the UI (it used to block for the whole re-transcription).
             transcript_path = self._save_artifacts(saved_dir, live_segments)
+            mode = self._mode
+            # Background transcription: always for record-only ("later"); for live,
+            # the accurate whole-file re-pass when finalizeRepass is on.
+            do_bg = bool(saved_dir and transcribe.available(self.settings["engine"])
+                         and (mode == "later" or self.settings.get("finalizeRepass")))
             repass = None
-            if (self.settings.get("finalizeRepass") and saved_dir
-                    and transcribe.available(self.settings["engine"])):
+            if do_bg:
                 repass = (saved_dir, self.settings["model"],
                           self.settings["language"] or None, self.settings["engine"],
-                          bool(self.settings.get("diarize")))
+                          bool(self.settings.get("diarize")), mode == "later")
             self._state = "idle"
             self._recorder = self._router = None
             self._out_dir = None
             out = {"saved": str(saved_dir) if saved_dir else None,
-                   "transcript": str(transcript_path) if transcript_path else None}
+                   "transcript": str(transcript_path) if transcript_path else None,
+                   "transcribing": do_bg, "mode": mode}
             status = self.status()
 
         _free_gpu()  # release the live model before the bg re-pass loads its own
@@ -256,8 +277,8 @@ class CaptureController:
         return {**out, **status}
 
     def _finalize_bg(self, saved_dir: Path, model: str, language: str | None,
-                     engine: str, do_diarize: bool) -> None:
-        """Background whole-file re-transcription -> overwrite the saved transcript."""
+                     engine: str, do_diarize: bool, notify: bool = False) -> None:
+        """Background whole-file transcription -> write the saved transcript."""
         try:
             wavs = sorted(saved_dir.glob("*.wav"))
             if not wavs:
@@ -279,10 +300,18 @@ class CaptureController:
                 (saved_dir / "transcript.md").write_text(md)
                 config.TRANSCRIPTS_ROOT.mkdir(parents=True, exist_ok=True)
                 (config.TRANSCRIPTS_ROOT / f"{saved_dir.name}.md").write_text(md)
-                log.info("finalize re-pass (bg): %d segments -> %s",
+                log.info("background transcript: %d segments -> %s",
                          len(segs), saved_dir.name)
+                if notify:
+                    _notify("Transcript ready ✓",
+                            f"{saved_dir.name} — {len(segs)} segments")
+            elif notify:
+                _notify("Transcription finished",
+                        f"{saved_dir.name} — no speech detected")
         except Exception as exc:
-            log.warning("finalize re-pass (bg) failed: %s", exc)
+            log.warning("background transcript failed: %s", exc)
+            if notify:
+                _notify("Transcription failed", saved_dir.name)
         finally:
             _free_gpu()
 

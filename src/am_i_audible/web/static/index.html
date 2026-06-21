@@ -41,7 +41,11 @@
       <div class="timer" id="timer">00:00:00</div>
       <div class="total" id="total">total recorded · 00:00:00</div>
 
-      <button class="record-btn" id="start-stop"><span class="ico"></span><span id="rec-btn-text">Start recording</span></button>
+      <div id="start-buttons">
+        <button class="record-btn" id="start-live"><span class="ico"></span> Record + Transcribe</button>
+        <button class="record-btn ghost-rec" id="start-later">○ Record only · transcribe after</button>
+      </div>
+      <button class="record-btn recording" id="stop-btn" hidden><span class="ico"></span> Stop</button>
 
       <div class="row" id="live-controls" hidden>
         <button class="btn" id="pause-btn">⏸ Pause</button>
@@ -51,7 +55,6 @@
       <div class="toggles">
         <label class="switch">Microphone track <input type="checkbox" id="t-mic" checked /></label>
         <label class="switch">System audio track <input type="checkbox" id="t-sys" checked /></label>
-        <label class="switch">Live transcription <input type="checkbox" id="t-stt" /></label>
       </div>
 
       <div class="field">
@@ -107,7 +110,6 @@
   <div class="modal-backdrop" id="settings-modal" hidden>
     <div class="modal">
       <h2>Settings</h2>
-      <label class="switch">Transcribe by default <input type="checkbox" id="s-transcribe" /></label>
       <div class="field"><label for="s-engine">STT engine</label>
         <select id="s-engine"></select></div>
       <div class="field"><label for="s-model">Model</label>

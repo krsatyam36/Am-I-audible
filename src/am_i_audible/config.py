@@ -63,3 +63,8 @@ STT_LANGUAGE = os.environ.get("AMIA_STT_LANGUAGE") or None  # None = autodetect
 # Seconds of audio per transcription pass. Smaller = lower latency, worse
 # accuracy (Whisper needs context). 5s is a sane near-live default.
 STT_WINDOW_SECONDS = float(os.environ.get("AMIA_STT_WINDOW", "5"))
+
+# LIVE mode uses a fast, small model + short window for low latency (~1-2s); the
+# accurate STT_MODEL is used for the whole-file background pass on stop.
+STT_LIVE_MODEL = os.environ.get("AMIA_STT_LIVE_MODEL", "base")
+STT_LIVE_WINDOW_SECONDS = float(os.environ.get("AMIA_STT_LIVE_WINDOW", "2"))
