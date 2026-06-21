@@ -22,12 +22,19 @@ from datetime import datetime
 from pathlib import Path
 
 from am_i_audible import config
-from am_i_audible.audio import transcribe
+from am_i_audible.audio import diarize, transcribe
 from am_i_audible.audio.recorder import DualTrackRecorder
 from am_i_audible.audio.router import AudioRouter
 from am_i_audible.audio.transcribe import TranscriptionEngine
 
 log = logging.getLogger(__name__)
+
+# Live per-track speaker labels (diarization-lite from dual-track capture).
+_TRACK_SPEAKER = {"mic": "You", "system": "Others"}
+
+
+def _speaker_label(track_name: str) -> str:
+    return _TRACK_SPEAKER.get(track_name, track_name.capitalize())
 
 
 class CaptureController:
@@ -35,7 +42,7 @@ class CaptureController:
         self._lock = threading.RLock()
         self._router: AudioRouter | None = None
         self._recorder: DualTrackRecorder | None = None
-        self._stt: TranscriptionEngine | None = None
+        self._stt_engines: dict[str, TranscriptionEngine] = {}
         self._out_dir: Path | None = None
         self._state = "idle"  # idle | recording | paused
         self._markers: list[dict] = []
@@ -45,7 +52,9 @@ class CaptureController:
             "model": config.STT_MODEL,
             "language": config.STT_LANGUAGE or "",
             "window": config.STT_WINDOW_SECONDS,
+            "diarize": False,
             "sttAvailable": transcribe.available(),
+            "diarizeAvailable": diarize.available(),
         }
 
     # -- queries ----------------------------------------------------------- #
@@ -74,9 +83,16 @@ class CaptureController:
                 "gains": gains,
                 "markers": self._markers,
                 "settings": self.settings,
-                "sttDevice": self._stt.active_device if self._stt else None,
-                "sttError": self._stt.error if self._stt else None,
+                "sttDevice": self._stt_device(),
+                "sttError": self._stt_error(),
             }
+
+    def _stt_device(self) -> str | None:
+        return next((e.active_device for e in self._stt_engines.values()
+                     if e.active_device), None)
+
+    def _stt_error(self) -> str | None:
+        return next((e.error for e in self._stt_engines.values() if e.error), None)
 
     def telemetry(self) -> dict:
         with self._lock:
@@ -112,23 +128,28 @@ class CaptureController:
                 out_dir=self._out_dir, record_mic=record_mic, record_system=record_system)
 
             want_stt = self.settings["transcribe"] if transcribe_live is None else transcribe_live
+            self._stt_engines = {}
             if want_stt and transcribe.available():
-                self._stt = TranscriptionEngine(
-                    on_segment=self._on_segment, model_size=self.settings["model"],
-                    language=self.settings["language"] or None,
-                    window_seconds=float(self.settings["window"]))
-                if self._stt.start():
-                    self._recorder.set_tap(self._stt.feed)
-                else:
-                    self._stt = None
-            else:
-                self._stt = None
+                for t in self._recorder.tracks:
+                    label = _speaker_label(t.name)
+                    eng = TranscriptionEngine(
+                        on_segment=self._on_segment, model_size=self.settings["model"],
+                        language=self.settings["language"] or None,
+                        window_seconds=float(self.settings["window"]), label=label)
+                    if eng.start():
+                        self._stt_engines[t.name] = eng
+                if self._stt_engines:
+                    self._recorder.set_tap(self._stt_dispatch)
 
             self._recorder.start()
             self._state = "recording"
-            log.info("controller: recording -> %s (stt=%s)", self._out_dir,
-                     self._stt.active_device if self._stt else "off")
+            log.info("controller: recording -> %s (stt=%s)", self._out_dir, self._stt_device() or "off")
             return self.status()
+
+    def _stt_dispatch(self, name: str, samples) -> None:
+        eng = self._stt_engines.get(name)
+        if eng is not None:
+            eng.feed(name, samples)
 
     def pause(self) -> dict:
         with self._lock:
@@ -167,7 +188,7 @@ class CaptureController:
 
     def update_settings(self, patch: dict) -> dict:
         with self._lock:
-            for k in ("transcribe", "model", "language", "window"):
+            for k in ("transcribe", "model", "language", "window", "diarize"):
                 if k in patch:
                     self.settings[k] = patch[k]
             return self.status()
@@ -181,11 +202,15 @@ class CaptureController:
                 self._recorder.stop()
             if self._router:
                 self._router.teardown()
-            segments = self._stt.stop() if self._stt else []
+            segments: list[dict] = []
+            for eng in self._stt_engines.values():
+                segments += eng.stop()
+            segments.sort(key=lambda s: s["start"])
             saved_dir = self._finalize_name(save_name)
             transcript_path = self._save_artifacts(saved_dir, segments)
             self._state = "idle"
-            self._recorder = self._router = self._stt = None
+            self._stt_engines = {}
+            self._recorder = self._router = None
             out = {"saved": str(saved_dir) if saved_dir else None,
                    "transcript": str(transcript_path) if transcript_path else None}
             self._out_dir = None
@@ -218,16 +243,31 @@ class CaptureController:
         return sessions
 
     def transcribe_file(self, name: str) -> dict:
-        """Re-transcribe a past session (blocking; server runs it off-thread)."""
+        """Re-transcribe a past session with speaker labels (You / Others).
+
+        Blocking; the server runs it off-thread.
+        """
         session = config.RECORDINGS_ROOT / name
         wavs = sorted(session.glob("*.wav"))
         if not wavs:
             return {"ok": False, "error": "no audio in session"}
         if not transcribe.available():
             return {"ok": False, "error": "faster-whisper not installed"}
-        segs = transcribe.transcribe_files(
-            wavs, model_size=self.settings["model"],
+        labeled = {transcribe.SPEAKER_LABELS.get(w.name, w.stem): w for w in wavs}
+        segs = transcribe.transcribe_labeled(
+            labeled, model_size=self.settings["model"],
             language=self.settings["language"] or None)
+        # optional: split the system track into individual speakers
+        if self.settings.get("diarize") and diarize.available():
+            sys_wav = session / config.SYSTEM_TRACK_FILENAME
+            if sys_wav.exists():
+                try:
+                    turns = diarize.diarize_wav(sys_wav)
+                    diarize.relabel([s for s in segs if s.get("speaker") == "Others"],
+                                    turns, "Others")
+                except Exception as exc:
+                    log.warning("diarization failed: %s", exc)
+        self._markers = []  # re-run isn't tied to live markers
         path = self._save_artifacts(session, segs)
         return {"ok": True, "segments": len(segs), "transcript": str(path)}
 
