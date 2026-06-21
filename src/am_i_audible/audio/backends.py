@@ -162,6 +162,13 @@ class PipeWireBackend:
 
     def create_null_sink(self, name: str, description: str) -> Handle:
         monitor = self.monitor_of(name)
+        # Remove any orphaned loopback still holding this sink name (e.g. from a
+        # previous run that was Ctrl-Z'd, crashed, or SIGKILLed). A leftover —
+        # especially a *suspended* one — can't pass audio yet blocks the name, so
+        # a fresh sink would route into a dead duplicate (silent capture).
+        if shutil.which("pkill"):
+            subprocess.run(["pkill", "-9", "-f", f"node.name={name} "],
+                           capture_output=True)
         proc = subprocess.Popen(
             [
                 "pw-loopback",

@@ -37,6 +37,18 @@ def _speaker_label(track_name: str) -> str:
     return _TRACK_SPEAKER.get(track_name, track_name.capitalize())
 
 
+def _free_gpu() -> None:
+    """Release GPU memory held by a dropped model (best-effort)."""
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 class CaptureController:
     def __init__(self):
         self._lock = threading.RLock()
@@ -217,17 +229,62 @@ class CaptureController:
                 self._router.teardown()
             live_segments = self._stt.stop() if self._stt else []
             live_segments.sort(key=lambda s: s["start"])
-            saved_dir = self._finalize_name(save_name)
-            segments = self._finalize_transcript(saved_dir, live_segments)
-            transcript_path = self._save_artifacts(saved_dir, segments)
-            self._state = "idle"
             self._stt = None
+            saved_dir = self._finalize_name(save_name)
+            # FAST PATH: save the live transcript + markers immediately and return.
+            # The high-accuracy whole-file re-pass runs in the background so Stop
+            # never freezes the UI (it used to block for the whole re-transcription).
+            transcript_path = self._save_artifacts(saved_dir, live_segments)
+            repass = None
+            if (self.settings.get("finalizeRepass") and saved_dir
+                    and transcribe.available(self.settings["engine"])):
+                repass = (saved_dir, self.settings["model"],
+                          self.settings["language"] or None, self.settings["engine"],
+                          bool(self.settings.get("diarize")))
+            self._state = "idle"
             self._recorder = self._router = None
+            self._out_dir = None
             out = {"saved": str(saved_dir) if saved_dir else None,
                    "transcript": str(transcript_path) if transcript_path else None}
-            self._out_dir = None
-            log.info("controller: stopped -> %s", saved_dir)
-            return {**out, **self.status()}
+            status = self.status()
+
+        _free_gpu()  # release the live model before the bg re-pass loads its own
+        if repass:
+            threading.Thread(target=self._finalize_bg, args=repass,
+                             name="finalize", daemon=True).start()
+        log.info("controller: stopped -> %s", out["saved"])
+        return {**out, **status}
+
+    def _finalize_bg(self, saved_dir: Path, model: str, language: str | None,
+                     engine: str, do_diarize: bool) -> None:
+        """Background whole-file re-transcription -> overwrite the saved transcript."""
+        try:
+            wavs = sorted(saved_dir.glob("*.wav"))
+            if not wavs:
+                return
+            labeled = {transcribe.SPEAKER_LABELS.get(w.name, w.stem): w for w in wavs}
+            segs = transcribe.transcribe_labeled(
+                labeled, model_size=model, language=language, engine=engine)
+            if do_diarize and diarize.available():
+                sys_wav = saved_dir / config.SYSTEM_TRACK_FILENAME
+                if sys_wav.exists():
+                    try:
+                        turns = diarize.diarize_wav(sys_wav)
+                        diarize.relabel([s for s in segs if s.get("speaker") == "Others"],
+                                        turns, "Others")
+                    except Exception as exc:
+                        log.warning("diarization failed: %s", exc)
+            if segs:
+                md = transcribe.segments_to_markdown(segs, saved_dir.name)
+                (saved_dir / "transcript.md").write_text(md)
+                config.TRANSCRIPTS_ROOT.mkdir(parents=True, exist_ok=True)
+                (config.TRANSCRIPTS_ROOT / f"{saved_dir.name}.md").write_text(md)
+                log.info("finalize re-pass (bg): %d segments -> %s",
+                         len(segs), saved_dir.name)
+        except Exception as exc:
+            log.warning("finalize re-pass (bg) failed: %s", exc)
+        finally:
+            _free_gpu()
 
     # -- session history --------------------------------------------------- #
     def list_sessions(self) -> list[dict]:
@@ -283,34 +340,6 @@ class CaptureController:
         self._markers = []  # re-run isn't tied to live markers
         path = self._save_artifacts(session, segs)
         return {"ok": True, "segments": len(segs), "transcript": str(path)}
-
-    def _finalize_transcript(self, saved_dir: Path | None,
-                             live_segments: list[dict]) -> list[dict]:
-        """Re-transcribe the whole saved file for accuracy; fall back to live.
-
-        Live transcription works on blind ~window-second chunks; a single
-        whole-file pass has full context and no boundary errors, so it's the
-        canonical transcript. Disable via the `finalizeRepass` setting.
-        """
-        if not saved_dir or not self.settings.get("finalizeRepass"):
-            return live_segments
-        if not transcribe.available():
-            return live_segments
-        wavs = sorted(saved_dir.glob("*.wav"))
-        if not wavs:
-            return live_segments
-        try:
-            labeled = {transcribe.SPEAKER_LABELS.get(w.name, w.stem): w for w in wavs}
-            segs = transcribe.transcribe_labeled(
-                labeled, model_size=self.settings["model"],
-                language=self.settings["language"] or None,
-                engine=self.settings["engine"])
-            log.info("finalize re-pass: %d segments (was %d live)",
-                     len(segs), len(live_segments))
-            return segs or live_segments
-        except Exception as exc:
-            log.warning("finalize re-pass failed (%s); keeping live transcript", exc)
-            return live_segments
 
     # -- helpers ----------------------------------------------------------- #
     def _on_segment(self, item: dict) -> None:
