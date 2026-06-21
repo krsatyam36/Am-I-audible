@@ -21,23 +21,24 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v0.2.0 — Full web app (`listen`) with dual-track capture + real-time transcription.**
+**v1.0.0 — Full local meeting recorder + transcriber with a one-command app.**
 
 Capture & routing
 - Virtual sink creation (system + mic on **separate** tracks), auto-detected backend (PipeWire-native or `pactl`)
-- Gapless microphone hot-swap (new route created before old one is destroyed)
+- Gapless microphone hot-swap (new route created before the old one is destroyed)
 - Dual-track recording to 48 kHz/16-bit mono WAV via one `pw-record` per track (kernel-buffered, no dropouts)
 
-Web UI — one command: **`listen`**
-- Launches a local FastAPI + WebSocket server and auto-opens the browser
+The `listen` app
+- One command launches a local server + opens the UI (browser, or a **native window** with `--window`)
 - Modern themed dashboard (6 themes), live **scrolling waveforms** + VU/dB meters per source
-- **Real-time transcription** (faster-whisper, auto CPU/GPU, model picker) streaming into a live transcript pane; Markdown saved on exit to `generated_transcripts/`
-- Controls: start/stop, **pause/resume**, **per-track gain**, **timestamped markers**, gapless **mic swap**, mic/system track toggles
-- **Session history**: browse past recordings, in-browser playback, download, and (re)transcribe
+- **Real-time transcription** (faster-whisper) with **speaker labels** — your mic is **You**, system audio is **Others** (diarization-lite from the separate tracks); optional **pyannote** splits *Others* into individual speakers
+- **GPU-accelerated** when CUDA is available (`listen --enable-gpu`), automatic CPU fallback otherwise
+- Controls: start/stop, **pause/resume**, **per-track gain**, **timestamped markers**, gapless **mic swap**, track toggles
+- **Session history**: browse, play in-browser, download, and (re)transcribe past recordings with speaker labels
 - **Save-on-exit** with custom name; tab-close rule (recording survives an accidental tab close; idle close quits)
-- App-drawer launcher: `listen --install-desktop`
+- App-drawer launcher (`listen --install-desktop`), `--autostart` to record on launch
 
-**Coming next (v0.3.0):** `pyannote` speaker diarization (who-said-what). **v1.0.0:** packaged desktop app.
+Markdown transcripts (LLM-ready, speaker-labelled) are written to `recorded-audio/generated_transcripts/`.
 
 ## System Prerequisites
 
@@ -66,10 +67,14 @@ pip install -r requirements.txt
 ### Web app (recommended)
 
 ```bash
-pipx install -e .            # one-time: installs the global `listen` command
+pipx install -e .                         # installs the global `listen` command
 pipx inject am-i-audible faster-whisper   # optional: enables transcription
 listen                       # launch the dashboard (auto-opens your browser)
+listen --window              # open in a native desktop window (needs pywebview)
+listen --autostart           # start recording immediately on launch
 listen --install-desktop     # add an "am-I-audible" entry to your app drawer
+listen --enable-gpu          # install CUDA libs for GPU transcription
+listen --gpu-check           # report whether GPU transcription is available
 listen --no-browser --port 8800   # headless / fixed port
 ```
 

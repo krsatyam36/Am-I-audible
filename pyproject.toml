@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "am-i-audible"
-version = "0.2.0"
+version = "1.0.0"
 description = "Linux-native dual-audio capture + transcription pipeline for meetings"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,6 +20,9 @@ dependencies = [
 
 [project.optional-dependencies]
 stt = ["faster-whisper>=1.0"]
+gpu = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12"]
+diarize = ["pyannote.audio>=3.1"]
+app = ["pywebview>=5.0"]
 
 [project.scripts]
 listen = "am_i_audible.web.server:main"

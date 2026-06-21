@@ -143,7 +143,9 @@ function addSegments(segs) {
   if (transcriptEmpty) { box.innerHTML = ""; transcriptEmpty = false; }
   for (const s of segs) {
     const el = document.createElement("div"); el.className = "seg";
-    el.innerHTML = `<span class="t">${fmt(s.start)}</span><span>${s.text}</span>`;
+    const spk = s.speaker
+      ? `<b class="spk ${s.speaker === "You" ? "me" : "them"}">${s.speaker}:</b> ` : "";
+    el.innerHTML = `<span class="t">${fmt(s.start)}</span><span>${spk}${s.text}</span>`;
     box.appendChild(el);
   }
   box.scrollTop = box.scrollHeight;
@@ -213,8 +215,10 @@ $("open-settings").addEventListener("click", async () => {
   const s = lastSettings || (await apiGet("/api/settings"));
   $("s-transcribe").checked = !!s.transcribe; $("s-model").value = s.model || "base";
   $("s-language").value = s.language || ""; $("s-window").value = s.window || 5;
+  $("s-diarize").checked = !!s.diarize; $("s-diarize").disabled = !s.diarizeAvailable;
   $("stt-availability").textContent = s.sttAvailable
-    ? "faster-whisper detected — transcription available."
+    ? ("faster-whisper detected." + (s.diarizeAvailable ? " Diarization ready." :
+        " Diarization needs pyannote.audio + HUGGINGFACE_TOKEN."))
     : "faster-whisper not installed — run: pip install faster-whisper";
   $("settings-modal").hidden = false;
 });
@@ -222,7 +226,8 @@ $("cancel-settings").addEventListener("click", () => ($("settings-modal").hidden
 $("save-settings").addEventListener("click", async () => {
   await api("/api/settings", {
     transcribe: $("s-transcribe").checked, model: $("s-model").value,
-    language: $("s-language").value.trim(), window: parseFloat($("s-window").value) || 5 });
+    language: $("s-language").value.trim(), window: parseFloat($("s-window").value) || 5,
+    diarize: $("s-diarize").checked });
   $("t-stt").checked = $("s-transcribe").checked;
   $("settings-modal").hidden = true; toast("Settings saved");
 });

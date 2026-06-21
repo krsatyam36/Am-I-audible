@@ -33,6 +33,34 @@ def _to_16k(mono_48k: np.ndarray) -> np.ndarray:
     return mono_48k[: n * 3].reshape(n, 3).mean(axis=1).astype(np.float32)
 
 
+_cuda_preloaded = False
+
+
+def _preload_cuda_libs() -> None:
+    """Make pip-installed nvidia cuBLAS/cuDNN wheels visible to ctranslate2.
+
+    `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` drops the runtime .so files
+    under site-packages/nvidia/*/lib but not on the loader path. Preloading them
+    with RTLD_GLOBAL lets ctranslate2 find them without touching LD_LIBRARY_PATH.
+    Best-effort and silent: if the wheels aren't installed, GPU just stays off.
+    """
+    global _cuda_preloaded
+    if _cuda_preloaded:
+        return
+    _cuda_preloaded = True
+    import ctypes
+    import glob
+    import site
+    roots = list(site.getsitepackages()) + [site.getusersitepackages()]
+    for base in roots:
+        for pat in ("nvidia/cublas/lib/*.so*", "nvidia/cudnn/lib/*.so*"):
+            for lib in sorted(glob.glob(f"{base}/{pat}")):
+                try:
+                    ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+
+
 def available() -> bool:
     try:
         import faster_whisper  # noqa: F401
@@ -44,8 +72,9 @@ def available() -> bool:
 class TranscriptionEngine:
     def __init__(self, on_segment=None, model_size: str | None = None,
                  device: str | None = None, language: str | None = None,
-                 window_seconds: float | None = None):
+                 window_seconds: float | None = None, label: str = ""):
         self.on_segment = on_segment
+        self.label = label
         self.model_size = model_size or config.STT_MODEL
         self.device = device or config.STT_DEVICE
         self.language = language if language is not None else config.STT_LANGUAGE
@@ -82,6 +111,7 @@ class TranscriptionEngine:
         want = self.device
         attempts = []
         if want in ("auto", "cuda"):
+            _preload_cuda_libs()
             attempts.append(("cuda", "int8_float16"))
         if want != "cuda":
             attempts.append(("cpu", "int8"))
@@ -169,7 +199,8 @@ class TranscriptionEngine:
                 if not text:
                     continue
                 item = {"start": round(offset + s.start, 2),
-                        "end": round(offset + s.end, 2), "text": text}
+                        "end": round(offset + s.end, 2), "text": text,
+                        "speaker": self.label}
                 self.segments.append(item)
                 if self.on_segment:
                     self.on_segment(item)
@@ -177,37 +208,55 @@ class TranscriptionEngine:
             log.error("STT transcribe failed: %s", exc)
 
 
-def transcribe_files(paths: list, model_size: str | None = None,
-                     device: str | None = None, language: str | None = None) -> list[dict]:
-    """Batch-transcribe one or more WAV files (mixed) -> list of segments.
-
-    Used for re-transcribing past recordings from the session history.
-    """
-    if not available():
-        raise RuntimeError("faster-whisper not installed")
+def _transcribe_one(path, model, language, label) -> list[dict]:
     import soundfile as sf
-    from faster_whisper import WhisperModel
-
-    mix = None
-    for p in paths:
-        data, _sr = sf.read(str(p), dtype="float32")
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        mix = data if mix is None else (
-            mix[: len(data)] + data[: len(mix)] if len(mix) != len(data)
-            else mix + data)
-    if mix is None:
-        return []
-    audio = _to_16k(np.clip(mix, -1.0, 1.0).astype(np.float32))
-
-    eng = TranscriptionEngine(model_size=model_size, device=device, language=language)
-    model = eng._load_model()
-    segs, _ = model.transcribe(audio, language=eng.language, vad_filter=True, beam_size=1)
+    data, _sr = sf.read(str(path), dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    audio = _to_16k(np.clip(data, -1.0, 1.0).astype(np.float32))
+    segs, _ = model.transcribe(audio, language=language, vad_filter=True, beam_size=1)
     out = []
     for s in segs:
         t = s.text.strip()
         if t:
-            out.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": t})
+            out.append({"start": round(s.start, 2), "end": round(s.end, 2),
+                        "text": t, "speaker": label})
+    return out
+
+
+def transcribe_files(paths: list, model_size: str | None = None,
+                     device: str | None = None, language: str | None = None) -> list[dict]:
+    """Batch-transcribe WAV files (mixed, unlabeled) -> segments. For history re-runs."""
+    if not available():
+        raise RuntimeError("faster-whisper not installed")
+    eng = TranscriptionEngine(model_size=model_size, device=device, language=language)
+    model = eng._load_model()
+    out = []
+    for p in paths:
+        out += _transcribe_one(p, model, eng.language, "")
+    out.sort(key=lambda s: s["start"])
+    return out
+
+
+# Track filename -> human speaker label for the finalize re-pass.
+SPEAKER_LABELS = {"mic.wav": "You", "system.wav": "Others"}
+
+
+def transcribe_labeled(track_paths: dict, model_size: str | None = None,
+                       device: str | None = None, language: str | None = None) -> list[dict]:
+    """Transcribe each track separately with a speaker label, merged by time.
+
+    track_paths maps speaker label -> WAV path. This is the diarization-lite that
+    falls out of dual-track capture: the mic is *you*, the system is *everyone else*.
+    """
+    if not available():
+        raise RuntimeError("faster-whisper not installed")
+    eng = TranscriptionEngine(model_size=model_size, device=device, language=language)
+    model = eng._load_model()
+    out = []
+    for label, path in track_paths.items():
+        out += _transcribe_one(path, model, eng.language, label)
+    out.sort(key=lambda s: s["start"])
     return out
 
 
@@ -218,6 +267,8 @@ def segments_to_markdown(segments: list[dict], title: str) -> str:
         return f"{sec // 3600:02d}:{(sec % 3600) // 60:02d}:{sec % 60:02d}"
     lines = [f"# {title}", "", f"_Transcribed by am-I-audible · {len(segments)} segments_", ""]
     for s in segments:
-        lines.append(f"**[{ts(s['start'])}]** {s['text']}")
+        spk = s.get("speaker")
+        prefix = f"**{spk}** " if spk else ""
+        lines.append(f"`[{ts(s['start'])}]` {prefix}{s['text']}")
     lines.append("")
     return "\n".join(lines)
