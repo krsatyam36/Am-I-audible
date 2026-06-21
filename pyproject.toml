@@ -18,6 +18,9 @@ dependencies = [
     "websockets>=12",
 ]
 
+[project.optional-dependencies]
+stt = ["faster-whisper>=1.0"]
+
 [project.scripts]
 listen = "am_i_audible.web.server:main"
 am-i-audible = "am_i_audible.cli:main"

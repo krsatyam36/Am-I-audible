@@ -53,6 +53,9 @@ class TrackCapture:
         self._peak = 0.0           # latest window peak, 0..1
         self._frames_written = 0
         self._error: Exception | None = None
+        self._gain = 1.0           # software gain multiplier
+        self._paused = False
+        self._tap = None           # optional callable(name, int16 ndarray)
         # Waveform envelope: peak-per-window points awaiting the UI to drain.
         self._env: deque[float] = deque(maxlen=_ENV_MAXLEN)
         self._env_lock = threading.Lock()
@@ -65,6 +68,19 @@ class TrackCapture:
     @property
     def peak(self) -> float:
         return self._peak
+
+    @property
+    def gain(self) -> float:
+        return self._gain
+
+    def set_gain(self, value: float) -> None:
+        self._gain = max(0.0, min(8.0, float(value)))
+
+    def set_paused(self, paused: bool) -> None:
+        self._paused = bool(paused)
+
+    def set_tap(self, tap) -> None:
+        self._tap = tap
 
     @property
     def seconds(self) -> float:
@@ -127,7 +143,15 @@ class TrackCapture:
                 buf = self._proc.stdout.read(chunk_bytes)
                 if not buf:
                     break  # pw-record exited
+                if self._paused:
+                    # keep draining the pipe (no backpressure) but write nothing
+                    self._level = 0.0
+                    continue
                 samples = np.frombuffer(buf, dtype=np.int16)
+                if self._gain != 1.0 and samples.size:
+                    samples = np.clip(
+                        samples.astype(np.float32) * self._gain, -32768, 32767
+                    ).astype(np.int16)
                 self._file.write(samples)
                 self._file.flush()
                 self._frames_written += samples.size
@@ -136,6 +160,11 @@ class TrackCapture:
                     self._level = float(np.sqrt(np.mean(norm ** 2)))
                     self._peak = float(np.max(np.abs(norm)))
                     self._append_envelope(norm)
+                    if self._tap is not None:
+                        try:
+                            self._tap(self.name, samples)
+                        except Exception:  # a bad tap must never break capture
+                            pass
         except Exception as exc:  # surface to the session without killing it
             self._error = exc
             log.error("capture[%s] failed: %s", self.name, exc)
@@ -173,6 +202,22 @@ class DualTrackRecorder:
     def stop(self) -> None:
         for t in self.tracks:
             t.stop()
+
+    def set_paused(self, paused: bool) -> None:
+        for t in self.tracks:
+            t.set_paused(paused)
+
+    def set_gain(self, name: str, value: float) -> None:
+        for t in self.tracks:
+            if t.name == name:
+                t.set_gain(value)
+
+    def set_tap(self, tap) -> None:
+        for t in self.tracks:
+            t.set_tap(tap)
+
+    def track(self, name: str) -> "TrackCapture | None":
+        return next((t for t in self.tracks if t.name == name), None)
 
     @property
     def seconds(self) -> float:

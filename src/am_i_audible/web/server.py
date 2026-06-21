@@ -1,29 +1,29 @@
 """FastAPI server behind the `listen` command.
 
-Lifecycle / tab-close rule (per product spec):
+Lifecycle / tab-close rule:
   * The **Exit** button (POST /api/exit) is the only thing that stops a *live*
     recording: it saves, finalizes, and shuts the server down.
-  * Closing the browser tab while **recording** -> server + capture keep running
-    (reopening the URL reconnects to the same session).
-  * Closing the tab while **idle** -> the app shuts down after a short grace
-    period (so a reload doesn't kill it).
+  * Closing the tab while **recording** -> server + capture keep running.
+  * Closing the tab while **idle** -> shut down after a short grace period.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import os
 import socket
 import threading
 import webbrowser
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from am_i_audible import __version__
+from am_i_audible import __version__, config
 from am_i_audible.core.controller import CaptureController
 
 log = logging.getLogger(__name__)
@@ -38,17 +38,14 @@ class AppState:
         self.controller = CaptureController()
         self.clients: set[WebSocket] = set()
         self.server: uvicorn.Server | None = None
-        self._shutdown_task: asyncio.Task | None = None
 
     def request_shutdown(self) -> None:
         if self.server:
             self.server.should_exit = True
 
     async def on_client_gone(self) -> None:
-        """Apply the tab-close rule when a websocket disconnects."""
         if self.clients or self.controller.is_recording:
-            return  # someone still watching, or a live recording -> stay up
-        # idle + no clients: shut down after a grace period (survives reloads)
+            return
         await asyncio.sleep(IDLE_SHUTDOWN_GRACE_S)
         if not self.clients and not self.controller.is_recording:
             log.info("idle and no clients -> shutting down")
@@ -70,15 +67,38 @@ def create_app(state: AppState) -> FastAPI:
     @app.post("/api/start")
     async def start(body: dict | None = None):
         body = body or {}
-        return ctrl.start(
-            record_mic=body.get("recordMic", True),
-            record_system=body.get("recordSystem", True),
-            label=body.get("label"),
-        )
+        return ctrl.start(record_mic=body.get("recordMic", True),
+                          record_system=body.get("recordSystem", True),
+                          label=body.get("label"),
+                          transcribe_live=body.get("transcribe"))
+
+    @app.post("/api/pause")
+    async def pause():
+        return ctrl.pause()
+
+    @app.post("/api/resume")
+    async def resume():
+        return ctrl.resume()
 
     @app.post("/api/swap-mic")
     async def swap_mic(body: dict):
         return ctrl.swap_mic(body["target"])
+
+    @app.post("/api/gain")
+    async def gain(body: dict):
+        return ctrl.set_gain(body["name"], float(body["value"]))
+
+    @app.post("/api/marker")
+    async def marker(body: dict | None = None):
+        return ctrl.add_marker((body or {}).get("label"))
+
+    @app.get("/api/settings")
+    async def get_settings():
+        return ctrl.settings
+
+    @app.post("/api/settings")
+    async def set_settings(body: dict):
+        return ctrl.update_settings(body)
 
     @app.post("/api/stop")
     async def stop(body: dict | None = None):
@@ -90,6 +110,28 @@ def create_app(state: AppState) -> FastAPI:
         state.request_shutdown()
         return result
 
+    @app.get("/api/sessions")
+    async def sessions():
+        return ctrl.list_sessions()
+
+    @app.post("/api/transcribe")
+    async def transcribe_session(body: dict):
+        return await asyncio.to_thread(ctrl.transcribe_file, body["name"])
+
+    @app.get("/api/transcript/{name}")
+    async def transcript(name: str):
+        p = _safe_session_path(name) / "transcript.md"
+        if not p.exists():
+            raise HTTPException(404, "no transcript")
+        return PlainTextResponse(p.read_text())
+
+    @app.get("/api/recording/{name}/{filename}")
+    async def recording(name: str, filename: str):
+        p = _safe_session_path(name) / filename
+        if p.suffix != ".wav" or not p.exists():
+            raise HTTPException(404, "not found")
+        return FileResponse(p, media_type="audio/wav")
+
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
         await websocket.accept()
@@ -97,8 +139,7 @@ def create_app(state: AppState) -> FastAPI:
         try:
             await websocket.send_json({"type": "status", "data": ctrl.status()})
             while True:
-                await websocket.send_json(
-                    {"type": "telemetry", "data": ctrl.telemetry()})
+                await websocket.send_json({"type": "telemetry", "data": ctrl.telemetry()})
                 await asyncio.sleep(1 / TELEMETRY_HZ)
         except WebSocketDisconnect:
             pass
@@ -111,6 +152,44 @@ def create_app(state: AppState) -> FastAPI:
     return app
 
 
+def _safe_session_path(name: str) -> Path:
+    """Resolve a session dir, refusing path traversal outside RECORDINGS_ROOT."""
+    root = config.RECORDINGS_ROOT.resolve()
+    p = (root / name).resolve()
+    if root not in p.parents and p != root:
+        raise HTTPException(400, "invalid path")
+    return p
+
+
+# --------------------------------------------------------------------------- #
+# .desktop launcher                                                           #
+# --------------------------------------------------------------------------- #
+def install_desktop() -> Path:
+    apps = Path.home() / ".local/share/applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    icon = STATIC_DIR / "icon.svg"
+    entry = apps / "am-i-audible.desktop"
+    listen_bin = Path.home() / ".local/bin/listen"
+    exec_cmd = str(listen_bin) if listen_bin.exists() else "listen"
+    entry.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=am-I-audible\n"
+        "GenericName=Meeting Recorder\n"
+        "Comment=Record & transcribe meetings (mic + system audio)\n"
+        f"Exec={exec_cmd}\n"
+        f"Icon={icon}\n"
+        "Terminal=false\n"
+        "Categories=AudioVideo;Audio;Recorder;\n"
+        "Keywords=record;transcribe;meeting;audio;\n"
+    )
+    entry.chmod(0o755)
+    return entry
+
+
+# --------------------------------------------------------------------------- #
+# entry point                                                                 #
+# --------------------------------------------------------------------------- #
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -118,25 +197,38 @@ def _free_port() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="listen", description="am-I-audible web UI")
+    parser.add_argument("--port", type=int, default=0, help="port (default: a free one)")
+    parser.add_argument("--no-browser", action="store_true", help="don't auto-open the browser")
+    parser.add_argument("--install-desktop", action="store_true",
+                        help="install an app-drawer launcher and exit")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    args = parser.parse_args(argv)
+
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    if args.install_desktop:
+        entry = install_desktop()
+        print(f"Installed launcher: {entry}\nLook for “am-I-audible” in your app drawer.")
+        return 0
+
     state = AppState()
     app = create_app(state)
-
-    port = _free_port()
+    port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}"
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    state.server = uvicorn.Server(config)
+    state.server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
 
-    def open_browser():
-        # tiny delay so the server is accepting connections first
-        import time
-        time.sleep(0.6)
-        webbrowser.open(url)
+    if not args.no_browser and not os.environ.get("AMIA_NO_BROWSER"):
+        def open_browser():
+            import time
+            time.sleep(0.6)
+            webbrowser.open(url)
+        threading.Thread(target=open_browser, daemon=True).start()
 
-    threading.Thread(target=open_browser, daemon=True).start()
-    print(f"\n  am-I-audible {__version__}  →  {url}\n  (opening your browser; close the tab when idle to quit)\n")
+    print(f"\n  am-I-audible {__version__}  →  {url}\n"
+          f"  (Exit & save in the UI stops a recording; closing an idle tab quits)\n")
     state.server.run()
-    # ensure any in-flight recording is torn down on exit
     if state.controller.is_recording:
         state.controller.stop()
     return 0
