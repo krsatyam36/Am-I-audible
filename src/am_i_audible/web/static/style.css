@@ -52,6 +52,8 @@
 }
 
 *{box-sizing:border-box}
+/* the `hidden` attribute must win over our display rules (#rec-controls, .fab…) */
+[hidden]{display:none !important}
 html,body{height:100%}
 body{
   margin:0; color:var(--text); background:var(--bg0);
@@ -142,6 +144,7 @@ select:focus,input[type=text]:focus{border-color:var(--accent);
 .record-btn .ico{width:13px; height:13px; border-radius:50%; background:#fff}
 .record-btn.recording .ico{border-radius:3px}
 #start-buttons{display:flex; flex-direction:column; gap:10px}
+#rec-controls{display:flex; flex-direction:column; gap:10px}
 .record-btn.ghost-rec{background:transparent; color:var(--text);
   border:1px solid var(--stroke-strong); box-shadow:none; font-weight:600; font-size:.92rem}
 .record-btn.ghost-rec:hover{background:color-mix(in srgb,var(--panel-solid) 50%, transparent)}
@@ -187,13 +190,27 @@ select:focus,input[type=text]:focus{border-color:var(--accent);
   background:linear-gradient(90deg,var(--accent2),var(--warn),var(--danger)); transition:width .08s linear}
 canvas{width:100%; height:150px; display:block}
 
-/* ---- exit FAB ---- */
-.exit{position:fixed; right:26px; bottom:26px; cursor:pointer; border:none; color:#fff;
-  padding:14px 20px; border-radius:14px; font-weight:700; font-size:.95rem; display:flex;
-  align-items:center; gap:9px; background:linear-gradient(135deg,var(--danger),#ff8a5b);
-  box-shadow:0 12px 34px color-mix(in srgb,var(--danger) 45%, transparent);
+/* ---- bottom-right FAB stack (Save + Exit) ---- */
+.fab-stack{position:fixed; right:26px; bottom:26px; display:flex; gap:12px; z-index:40}
+.fab{cursor:pointer; border:none; color:#fff; padding:14px 20px; border-radius:14px;
+  font-weight:700; font-size:.95rem; display:flex; align-items:center; gap:9px;
   transition:transform .08s, filter .2s}
-.exit:hover{filter:brightness(1.08)} .exit:active{transform:translateY(1px)}
+.fab:hover{filter:brightness(1.08)} .fab:active{transform:translateY(1px)}
+.save-fab{background:linear-gradient(135deg,var(--accent),var(--accent2));
+  box-shadow:0 12px 34px color-mix(in srgb,var(--accent) 45%, transparent)}
+.exit-fab{background:linear-gradient(135deg,var(--danger),#ff8a5b);
+  box-shadow:0 12px 34px color-mix(in srgb,var(--danger) 45%, transparent)}
+
+/* ---- name popup corners ---- */
+.name-modal{position:relative; padding-top:64px}
+.corner-x,.corner-tick{position:absolute; top:14px; width:34px; height:34px; border-radius:10px;
+  border:1px solid var(--stroke-strong); cursor:pointer; font-size:1rem; font-weight:700;
+  display:grid; place-items:center; transition:filter .2s}
+.corner-x{left:14px; background:transparent; color:var(--muted)}
+.corner-x:hover{color:var(--danger); border-color:var(--danger)}
+.corner-tick{right:14px; background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#fff; border-color:transparent}
+.corner-tick:hover{filter:brightness(1.1)}
 
 /* ---- modal ---- */
 .modal-backdrop{position:fixed; inset:0; background:rgba(4,6,12,.6);

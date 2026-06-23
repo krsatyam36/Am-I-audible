@@ -26,6 +26,7 @@ from pathlib import Path
 from am_i_audible import config
 from am_i_audible.audio import diarize, engines, transcribe
 from am_i_audible.audio.recorder import DualTrackRecorder
+from am_i_audible.jobs import spawn as spawn_transcribe_job
 from am_i_audible.audio.router import AudioRouter
 from am_i_audible.audio.transcribe import TranscriptionEngine
 
@@ -234,10 +235,19 @@ class CaptureController:
             self._refresh_engines()
             return self.status()
 
-    def stop(self, save_name: str | None = None) -> dict:
+    def finish(self, name: str | None = None, do_transcribe: bool = True) -> dict:
+        """Finalize the current recording.
+
+        SAVE  -> finish(name, do_transcribe=True): name it, kick off the background
+                 transcription job, return to idle (the app stays open).
+        EXIT  -> finish(None, do_transcribe=False): just finalize the WAVs into a
+                 timestamped session (kept in History), no transcription job.
+        Already-spawned transcription jobs are detached and survive either way.
+        """
         with self._lock:
             if not self.is_recording:
-                return {"saved": None, "transcript": None, **self.status()}
+                return {"saved": None, "transcript": None, "transcribing": False,
+                        "mode": self._mode, **self.status()}
             if self._recorder:
                 self._recorder.set_tap(None)
                 self._recorder.stop()
@@ -246,15 +256,13 @@ class CaptureController:
             live_segments = self._stt.stop() if self._stt else []
             live_segments.sort(key=lambda s: s["start"])
             self._stt = None
-            saved_dir = self._finalize_name(save_name)
-            # FAST PATH: save the live transcript + markers immediately and return.
-            # The high-accuracy whole-file re-pass runs in the background so Stop
-            # never freezes the UI (it used to block for the whole re-transcription).
+            saved_dir = self._finalize_name(name)
             transcript_path = self._save_artifacts(saved_dir, live_segments)
             mode = self._mode
-            # Background transcription: always for record-only ("later"); for live,
-            # the accurate whole-file re-pass when finalizeRepass is on.
-            do_bg = bool(saved_dir and transcribe.available(self.settings["engine"])
+            # Background transcription only when saving: always for record-only
+            # ("later"); for live, the accurate whole-file re-pass if enabled.
+            do_bg = bool(do_transcribe and saved_dir
+                         and transcribe.available(self.settings["engine"])
                          and (mode == "later" or self.settings.get("finalizeRepass")))
             repass = None
             if do_bg:
@@ -269,51 +277,11 @@ class CaptureController:
                    "transcribing": do_bg, "mode": mode}
             status = self.status()
 
-        _free_gpu()  # release the live model before the bg re-pass loads its own
+        _free_gpu()  # release the live model before the job loads its own
         if repass:
-            threading.Thread(target=self._finalize_bg, args=repass,
-                             name="finalize", daemon=True).start()
-        log.info("controller: stopped -> %s", out["saved"])
+            spawn_transcribe_job(*repass)
+        log.info("controller: finished -> %s (transcribe=%s)", out["saved"], do_bg)
         return {**out, **status}
-
-    def _finalize_bg(self, saved_dir: Path, model: str, language: str | None,
-                     engine: str, do_diarize: bool, notify: bool = False) -> None:
-        """Background whole-file transcription -> write the saved transcript."""
-        try:
-            wavs = sorted(saved_dir.glob("*.wav"))
-            if not wavs:
-                return
-            labeled = {transcribe.SPEAKER_LABELS.get(w.name, w.stem): w for w in wavs}
-            segs = transcribe.transcribe_labeled(
-                labeled, model_size=model, language=language, engine=engine)
-            if do_diarize and diarize.available():
-                sys_wav = saved_dir / config.SYSTEM_TRACK_FILENAME
-                if sys_wav.exists():
-                    try:
-                        turns = diarize.diarize_wav(sys_wav)
-                        diarize.relabel([s for s in segs if s.get("speaker") == "Others"],
-                                        turns, "Others")
-                    except Exception as exc:
-                        log.warning("diarization failed: %s", exc)
-            if segs:
-                md = transcribe.segments_to_markdown(segs, saved_dir.name)
-                (saved_dir / "transcript.md").write_text(md)
-                config.TRANSCRIPTS_ROOT.mkdir(parents=True, exist_ok=True)
-                (config.TRANSCRIPTS_ROOT / f"{saved_dir.name}.md").write_text(md)
-                log.info("background transcript: %d segments -> %s",
-                         len(segs), saved_dir.name)
-                if notify:
-                    _notify("Transcript ready ✓",
-                            f"{saved_dir.name} — {len(segs)} segments")
-            elif notify:
-                _notify("Transcription finished",
-                        f"{saved_dir.name} — no speech detected")
-        except Exception as exc:
-            log.warning("background transcript failed: %s", exc)
-            if notify:
-                _notify("Transcription failed", saved_dir.name)
-        finally:
-            _free_gpu()
 
     # -- session history --------------------------------------------------- #
     def list_sessions(self) -> list[dict]:
@@ -341,34 +309,21 @@ class CaptureController:
         return sessions
 
     def transcribe_file(self, name: str) -> dict:
-        """Re-transcribe a past session with speaker labels (You / Others).
+        """Re-transcribe a past session in a detached background job (You/Others).
 
-        Blocking; the server runs it off-thread.
+        Returns immediately; the job writes transcript.md and fires a desktop
+        notification when done — so even hour-long files don't block the UI.
         """
         session = config.RECORDINGS_ROOT / name
-        wavs = sorted(session.glob("*.wav"))
-        if not wavs:
+        if not sorted(session.glob("*.wav")):
             return {"ok": False, "error": "no audio in session"}
-        if not transcribe.available():
+        if not transcribe.available(self.settings["engine"]):
             return {"ok": False, "error": "faster-whisper not installed"}
-        labeled = {transcribe.SPEAKER_LABELS.get(w.name, w.stem): w for w in wavs}
-        segs = transcribe.transcribe_labeled(
-            labeled, model_size=self.settings["model"],
-            language=self.settings["language"] or None,
-            engine=self.settings["engine"])
-        # optional: split the system track into individual speakers
-        if self.settings.get("diarize") and diarize.available():
-            sys_wav = session / config.SYSTEM_TRACK_FILENAME
-            if sys_wav.exists():
-                try:
-                    turns = diarize.diarize_wav(sys_wav)
-                    diarize.relabel([s for s in segs if s.get("speaker") == "Others"],
-                                    turns, "Others")
-                except Exception as exc:
-                    log.warning("diarization failed: %s", exc)
-        self._markers = []  # re-run isn't tied to live markers
-        path = self._save_artifacts(session, segs)
-        return {"ok": True, "segments": len(segs), "transcript": str(path)}
+        spawn_transcribe_job(
+            session, model=self.settings["model"],
+            language=self.settings["language"] or None, engine=self.settings["engine"],
+            diarize=bool(self.settings.get("diarize")), notify=True)
+        return {"ok": True, "started": True}
 
     # -- helpers ----------------------------------------------------------- #
     def _on_segment(self, item: dict) -> None:
