@@ -21,7 +21,7 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v1.4.0 — One-command setup, dependency doctor, model prefetch, rewritten install flow.**
+**v1.4.1 — Clean Ctrl-C shutdown, graceful exit message, uvicorn interrupt handling.**
 
 Capture & routing
 - Virtual sink creation (system + mic on **separate** tracks), auto-detected backend (PipeWire-native or `pactl`)

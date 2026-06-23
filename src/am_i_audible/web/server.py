@@ -353,29 +353,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.autostart:
         threading.Timer(1.0, lambda: state.controller.start()).start()
 
-    if args.window:
-        # server in a background thread; native window owns the main thread
-        t = threading.Thread(target=state.server.run, daemon=True)
-        t.start()
-        if _try_native_window(url):
-            state.request_shutdown()
-            t.join(timeout=3)
-            if state.controller.is_recording:
-                state.controller.finish(None, do_transcribe=False)
-            return 0
-        # fell back: keep server running, open a browser instead
-        if not args.no_browser:
-            webbrowser.open(url)
-        t.join()
-    else:
-        if not args.no_browser and not os.environ.get("AMIA_NO_BROWSER"):
-            threading.Thread(
-                target=lambda: (__import__("time").sleep(0.6), webbrowser.open(url)),
-                daemon=True).start()
-        state.server.run()
+    try:
+        if args.window:
+            # server in a background thread; native window owns the main thread
+            t = threading.Thread(target=state.server.run, daemon=True)
+            t.start()
+            if _try_native_window(url):
+                state.request_shutdown()
+                t.join(timeout=3)
+                if state.controller.is_recording:
+                    state.controller.finish(None, do_transcribe=False)
+                return 0
+            # fell back: keep server running, open a browser instead
+            if not args.no_browser:
+                webbrowser.open(url)
+            t.join()
+        else:
+            if not args.no_browser and not os.environ.get("AMIA_NO_BROWSER"):
+                threading.Thread(
+                    target=lambda: (__import__("time").sleep(0.6), webbrowser.open(url)),
+                    daemon=True).start()
+            state.server.run()
+    except KeyboardInterrupt:
+        pass  # Ctrl-C is a normal way to quit; no ugly traceback
 
     if state.controller.is_recording:
+        # a live recording is finalized into History (transcribe via History later)
         state.controller.finish(None, do_transcribe=False)
+    print("\n  am-I-audible closed. Recordings are in History; transcripts finish in the background.\n")
     return 0
 
 
