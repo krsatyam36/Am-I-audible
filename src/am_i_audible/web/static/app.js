@@ -91,9 +91,9 @@ function setState(s) {
   $("rec-led").classList.toggle("live", s === "recording");
   $("rec-label").textContent = s.toUpperCase();
   $("start-buttons").hidden = rec;
-  $("stop-btn").hidden = !rec;
-  $("live-controls").hidden = !rec;
-  $("pause-btn").textContent = s === "paused" ? "▶ Resume" : "⏸ Pause";
+  $("rec-controls").hidden = !rec;
+  $("save-btn").hidden = !rec;
+  $("pr-text").textContent = s === "paused" ? "Resume" : "Pause";
   for (const id of ["t-mic", "t-sys"]) $(id).disabled = rec;
 }
 
@@ -189,15 +189,7 @@ async function startRecording(mode) {
 }
 $("start-live").addEventListener("click", () => startRecording("live"));
 $("start-later").addEventListener("click", () => startRecording("later"));
-$("stop-btn").addEventListener("click", async () => {
-  setState("idle");                         // update UI instantly, don't wait
-  const r = await api("/api/stop", {});
-  applyStatus(r);
-  if (r.transcribing && r.mode === "later")
-    toast("Transcribing in the background — you'll get a notification when ready", 4500);
-  else toast(r.saved ? "Saved to History" : "Stopped");
-});
-$("pause-btn").addEventListener("click", async () => {
+$("pause-resume").addEventListener("click", async () => {
   applyStatus(await api(state === "paused" ? "/api/resume" : "/api/pause", {}));
 });
 $("marker-btn").addEventListener("click", async () => {
@@ -209,16 +201,30 @@ $("mic-select").addEventListener("change", async (e) => {
   const st = await api("/api/swap-mic", { target: e.target.value }); toast("Swapped mic → " + (st.currentMic || ""));
 });
 
-// ---- exit / save ---------------------------------------------------------
-$("exit-btn").addEventListener("click", () => { $("save-name").value = ""; $("modal").hidden = false; $("save-name").focus(); });
-$("cancel-exit").addEventListener("click", () => ($("modal").hidden = true));
-$("confirm-exit").addEventListener("click", async () => {
-  const r = await api("/api/exit", { name: $("save-name").value.trim() });
-  $("modal").hidden = true;
+// ---- save (name popup -> finalize + transcribe, stay on home) ------------
+$("save-btn").addEventListener("click", () => {
+  if (!isRec()) return;
+  $("save-name").value = ""; $("save-modal").hidden = false; $("save-name").focus();
+});
+$("save-cancel").addEventListener("click", () => ($("save-modal").hidden = true));  // keep recording
+async function doSave() {
+  const name = $("save-name").value.trim();
+  $("save-modal").hidden = true;
+  const r = await api("/api/save", { name });
+  applyStatus(r);  // back to home (idle)
+  toast(r.transcribing
+    ? "Saved ✓ — transcribing in the background, you'll be notified"
+    : "Saved ✓ to History", 4500);
+}
+$("save-confirm").addEventListener("click", doSave);
+$("save-name").addEventListener("keydown", (e) => { if (e.key === "Enter") doSave(); });
+
+// ---- exit (quit the whole app; recording kept in History) ----------------
+$("exit-btn").addEventListener("click", async () => {
+  await api("/api/exit", {});
   document.body.innerHTML = `<div style="display:grid;place-items:center;height:100vh;text-align:center;font-family:system-ui">
-    <div><h1>Saved ✓</h1><p style="opacity:.7">${r.saved || "(nothing was recording)"}</p>
-    ${r.transcript ? `<p style="opacity:.6">📝 ${r.transcript}</p>` : ""}
-    <p style="opacity:.5">You can close this tab.</p></div></div>`;
+    <div><h1>Closed</h1><p style="opacity:.6">am-I-audible has exited — you can close this tab.</p>
+    <p style="opacity:.45">Any background transcription will still finish and notify you.</p></div></div>`;
 });
 
 // ---- settings ------------------------------------------------------------
@@ -307,15 +313,18 @@ async function loadSessions() {
     b.addEventListener("click", async () => {
       b.disabled = true; b.textContent = "Transcribing…";
       const r = await api("/api/transcribe", { name: b.dataset.tx });
-      toast(r.ok ? `Transcribed (${r.segments} segments)` : `Failed: ${r.error}`);
-      loadSessions();
+      if (r.ok) {
+        toast("Transcribing in the background — you'll get a notification when ready", 4500);
+      } else {
+        toast("Failed: " + r.error); b.disabled = false; b.textContent = "Transcribe";
+      }
     }));
 }
 
 // ---- keyboard ------------------------------------------------------------
 addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
-  if (e.key === "q") $("exit-btn").click();
+  if (e.key === " " && isRec()) { e.preventDefault(); $("pause-resume").click(); }
   else if (e.key === "m" && isRec()) $("marker-btn").click();
-  else if (e.key === " " && isRec()) { e.preventDefault(); $("pause-btn").click(); }
+  else if ((e.key === "s" || e.key === "S") && isRec()) $("save-btn").click();
 });

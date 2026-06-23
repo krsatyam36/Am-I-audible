@@ -21,7 +21,7 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v1.0.0 — Full local meeting recorder + transcriber with a one-command app.**
+**v1.3.0 — Detached background transcription, Save/Exit decoupling, VRAM-efficient default model.**
 
 Capture & routing
 - Virtual sink creation (system + mic on **separate** tracks), auto-detected backend (PipeWire-native or `pactl`)
@@ -32,10 +32,11 @@ The `listen` app
 - One command launches a local server + opens the UI (browser, or a **native window** with `--window`)
 - Modern themed dashboard (6 themes), live **scrolling waveforms** + VU/dB meters per source
 - **Real-time transcription** (faster-whisper) with **speaker labels** — your mic is **You**, system audio is **Others** (diarization-lite from the separate tracks); optional **pyannote** splits *Others* into individual speakers
-- **GPU-accelerated** when CUDA is available (`listen --enable-gpu`), automatic CPU fallback otherwise
+- **GPU-accelerated** when CUDA is available (`listen --enable-gpu`), automatic CPU fallback, GPU OOM fallback to CPU
+- **Detached background transcription**: transcription runs as a separate process that survives app exit; GPU OOM automatically retries on CPU; desktop notification on completion
+- **Save/Exit decoupled**: **Save** finalizes the recording, names it, and kicks off background transcription while the app stays open; **Exit** quits the app immediately (any running transcription continues independently)
 - Controls: start/stop, **pause/resume**, **per-track gain**, **timestamped markers**, gapless **mic swap**, track toggles
-- **Session history**: browse, play in-browser, download, and (re)transcribe past recordings with speaker labels
-- **Save-on-exit** with custom name; tab-close rule (recording survives an accidental tab close; idle close quits)
+- **Session history**: browse, play in-browser, download, and (re)transcribe past recordings (now non-blocking, background)
 - App-drawer launcher (`listen --install-desktop`), `--autostart` to record on launch
 
 Markdown transcripts (LLM-ready, speaker-labelled) are written to `recorded-audio/generated_transcripts/`.

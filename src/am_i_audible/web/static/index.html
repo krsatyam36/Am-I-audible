@@ -45,10 +45,9 @@
         <button class="record-btn" id="start-live"><span class="ico"></span> Record + Transcribe</button>
         <button class="record-btn ghost-rec" id="start-later">○ Record only · transcribe after</button>
       </div>
-      <button class="record-btn recording" id="stop-btn" hidden><span class="ico"></span> Stop</button>
 
-      <div class="row" id="live-controls" hidden>
-        <button class="btn" id="pause-btn">⏸ Pause</button>
+      <div id="rec-controls" hidden>
+        <button class="record-btn recording" id="pause-resume"><span class="ico"></span> <span id="pr-text">Pause</span></button>
         <button class="btn" id="marker-btn">⚑ Marker <span id="marker-count" class="pill">0</span></button>
       </div>
 
@@ -65,7 +64,7 @@
       <div class="gains" id="gains"></div>
 
       <p class="hint">Close this tab while recording and it <b>keeps running</b> —
-        reopen to return. Use <b>Exit &amp; save</b> (bottom&#8209;right) to stop.</p>
+        reopen to return. <b>Save</b> to keep a recording &amp; transcribe; <b>Exit</b> to quit.</p>
     </section>
 
     <section class="right-col">
@@ -76,7 +75,7 @@
           <span class="db" id="stt-status">off</span>
         </div>
         <div class="transcript" id="transcript">
-          <p class="empty">Enable “Live transcription” before recording to see text here.</p>
+          <p class="empty">Start “Record + Transcribe” for live text here. “Record only” transcribes after you Save.</p>
         </div>
       </div>
     </section>
@@ -91,18 +90,19 @@
     <div id="sessions" class="sessions"></div>
   </main>
 
-  <button class="exit" id="exit-btn">⏻ Exit &amp; save</button>
+  <div class="fab-stack">
+    <button class="fab save-fab" id="save-btn" hidden>💾 Save</button>
+    <button class="fab exit-fab" id="exit-btn">⏻ Exit</button>
+  </div>
 
-  <!-- Save modal -->
-  <div class="modal-backdrop" id="modal" hidden>
-    <div class="modal">
-      <h2>Save recording</h2>
-      <p>Name this session, or leave blank to keep the timestamp.</p>
+  <!-- Save (name) popup -->
+  <div class="modal-backdrop" id="save-modal" hidden>
+    <div class="modal name-modal">
+      <button class="corner-x" id="save-cancel" title="Cancel save (keep recording)">✕</button>
+      <button class="corner-tick" id="save-confirm" title="Save recording">✓</button>
+      <h2>Name your recording</h2>
+      <p>Type a name, then press ✓ to save. ✕ keeps recording.</p>
       <input type="text" id="save-name" placeholder="e.g. petasys-standup" />
-      <div class="modal-actions">
-        <button class="btn ghost" id="cancel-exit">Cancel</button>
-        <button class="btn primary" id="confirm-exit">Save &amp; quit</button>
-      </div>
     </div>
   </div>
 

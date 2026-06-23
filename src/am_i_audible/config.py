@@ -54,10 +54,11 @@ SYSTEM_TRACK_FILENAME = "system.wav"
 METER_REFRESH_HZ = 12
 
 # --- Transcription (v0.2.0 real-time STT) ---------------------------------
-# Default to large-v3: top accuracy, GPU-friendly, and already cached here.
-# (large-v3-turbo is faster but its download is large; pick it in Settings once
-# it's fully downloaded.) Override with $AMIA_STT_MODEL.
-STT_MODEL = os.environ.get("AMIA_STT_MODEL", "large-v3")
+# Default to distil-large-v3: near-large-v3 accuracy (English), but ~half the
+# VRAM (~1.2 GB) so it transcribes hour-long recordings on a 4 GB GPU without
+# OOM. large-v3 is selectable for max multilingual accuracy (best on short clips
+# or larger GPUs; long files fall back to CPU). Override with $AMIA_STT_MODEL.
+STT_MODEL = os.environ.get("AMIA_STT_MODEL", "distil-large-v3")
 STT_DEVICE = os.environ.get("AMIA_STT_DEVICE", "auto")  # auto | cuda | cpu
 STT_LANGUAGE = os.environ.get("AMIA_STT_LANGUAGE") or None  # None = autodetect
 # Seconds of audio per transcription pass. Smaller = lower latency, worse

@@ -100,13 +100,16 @@ def create_app(state: AppState) -> FastAPI:
     async def set_settings(body: dict):
         return ctrl.update_settings(body)
 
-    @app.post("/api/stop")
-    async def stop(body: dict | None = None):
-        return ctrl.stop((body or {}).get("name"))
+    @app.post("/api/save")
+    async def save(body: dict | None = None):
+        # Finalize + name + transcribe in the background; app stays open (home).
+        return ctrl.finish((body or {}).get("name"), do_transcribe=True)
 
     @app.post("/api/exit")
     async def exit_app(body: dict | None = None):
-        result = ctrl.stop((body or {}).get("name"))
+        # True quit: finalize any recording into History (no new transcription),
+        # then shut the server down. Detached transcription jobs keep running.
+        result = ctrl.finish(None, do_transcribe=False)
         state.request_shutdown()
         return result
 
@@ -116,7 +119,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/api/transcribe")
     async def transcribe_session(body: dict):
-        return await asyncio.to_thread(ctrl.transcribe_file, body["name"])
+        return ctrl.transcribe_file(body["name"])
 
     @app.get("/api/transcript/{name}")
     async def transcript(name: str):
@@ -290,7 +293,7 @@ def main(argv: list[str] | None = None) -> int:
             state.request_shutdown()
             t.join(timeout=3)
             if state.controller.is_recording:
-                state.controller.stop()
+                state.controller.finish(None, do_transcribe=False)
             return 0
         # fell back: keep server running, open a browser instead
         if not args.no_browser:
@@ -304,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         state.server.run()
 
     if state.controller.is_recording:
-        state.controller.stop()
+        state.controller.finish(None, do_transcribe=False)
     return 0
 
 
