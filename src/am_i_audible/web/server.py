@@ -204,6 +204,66 @@ def enable_gpu() -> int:
     return rc
 
 
+def doctor() -> int:
+    """Report whether every dependency is present, with apt/pip fixes."""
+    import shutil
+    print(f"\nam-I-audible {__version__} — environment check\n")
+    essential = True
+    bins = {"pw-loopback": "pipewire-bin", "pw-link": "pipewire-bin",
+            "pw-record": "pipewire-bin", "wpctl": "wireplumber"}
+    for b, pkg in bins.items():
+        ok = bool(shutil.which(b))
+        essential = essential and ok
+        print(f"  [{'✓' if ok else '✗'}] {b:<12}" + ("" if ok else f"  → sudo apt install {pkg}"))
+    for b, pkg in {"notify-send": "libnotify-bin", "ffmpeg": "ffmpeg"}.items():
+        ok = bool(shutil.which(b))
+        print(f"  [{'✓' if ok else '·'}] {b:<12}" + ("" if ok else f"  (optional) sudo apt install {pkg}"))
+    for mod, pkg in (("sounddevice", "libportaudio2"), ("soundfile", "libsndfile1")):
+        try:
+            __import__(mod); ok = True
+        except Exception:
+            ok = False
+        essential = essential and ok
+        print(f"  [{'✓' if ok else '✗'}] python {mod:<11}" + ("" if ok else f"  → sudo apt install {pkg} && pip install {mod}"))
+    print("\n  STT engines:")
+    from am_i_audible.audio import engines
+    for e in engines.list_engines():
+        mark = "✓" if e["available"] else "·"
+        print(f"  [{mark}] {e['key']:<11}" + ("" if e["available"] else f"  ({e['installHint']})"))
+    print("\n  GPU:")
+    try:
+        from am_i_audible.audio import transcribe
+        rec = transcribe.engines.get_recognizer("whisper", "tiny", "cuda")
+        rec.load(); print("  [✓] CUDA transcription available")
+    except Exception:
+        print("  [·] CUDA not available — CPU will be used (listen --enable-gpu to add it)")
+    print("\n" + ("All essentials present ✓ — run: listen" if essential
+                  else "Missing essentials (✗) — fix the lines above, then re-run --doctor"))
+    return 0 if essential else 1
+
+
+def prefetch_models() -> int:
+    """Download the live + accurate STT models up front so first use is instant."""
+    from am_i_audible import config
+    from am_i_audible.audio import engines, transcribe
+    if not transcribe.available("whisper"):
+        print("faster-whisper not installed — run `listen` setup first.")
+        return 1
+    models = []
+    for m in (config.STT_LIVE_MODEL, config.STT_MODEL):
+        if m not in models:
+            models.append(m)
+    for m in models:
+        print(f"↓ downloading model '{m}' (one-time)…")
+        try:
+            engines.get_recognizer("whisper", m, "cpu").load()  # downloads + caches
+            print(f"  ✓ {m} ready")
+        except Exception as exc:
+            print(f"  ✗ {m}: {exc}")
+    print("Models cached. `listen` will load them locally from now on.")
+    return 0
+
+
 def gpu_check() -> int:
     from am_i_audible.audio import transcribe
     if not transcribe.available():
@@ -256,6 +316,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="install NVIDIA CUDA libs for GPU transcription and exit")
     parser.add_argument("--gpu-check", action="store_true",
                         help="report whether GPU transcription is available and exit")
+    parser.add_argument("--prefetch", action="store_true",
+                        help="download the STT models now (so first use is instant) and exit")
+    parser.add_argument("--doctor", action="store_true",
+                        help="check system deps + engines and report what's missing")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
@@ -265,6 +329,10 @@ def main(argv: list[str] | None = None) -> int:
         return enable_gpu()
     if args.gpu_check:
         return gpu_check()
+    if args.prefetch:
+        return prefetch_models()
+    if args.doctor:
+        return doctor()
     if args.install_desktop:
         extra = " ".join(a for a, on in
                          (("--window", args.window), ("--autostart", args.autostart)) if on)
