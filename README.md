@@ -21,7 +21,7 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v1.3.0 — Detached background transcription, Save/Exit decoupling, VRAM-efficient default model.**
+**v1.4.0 — One-command setup, dependency doctor, model prefetch, rewritten install flow.**
 
 Capture & routing
 - Virtual sink creation (system + mic on **separate** tracks), auto-detected backend (PipeWire-native or `pactl`)
@@ -50,18 +50,35 @@ Markdown transcripts (LLM-ready, speaker-labelled) are written to `recorded-audi
 
 ## Installation
 
+**One command** does all the heavy lifting — system packages, the global `listen`
+command, transcription engine, GPU libraries (if an NVIDIA GPU is present), and it
+**pre-downloads the speech models** — so the very first `listen` just works:
+
 ```bash
-# Clone the repo
-git clone https://github.com/<your-org>/am-i-audible.git
-cd am-i-audible
-
-# Create and activate a virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies (audio capture + web UI)
-pip install -r requirements.txt
+git clone https://github.com/krsatyam36/Am-I-audible.git
+cd Am-I-audible
+./setup.sh          # flags: --no-gpu  --no-stt  --no-desktop
+listen              # records, transcribes, notifies — no further setup
 ```
+
+Verify your environment any time:
+
+```bash
+listen --doctor     # lists every dependency with ✓/✗ and the exact fix
+```
+
+<details>
+<summary>Manual install (if you prefer not to run the script)</summary>
+
+```bash
+sudo apt install pipewire pipewire-pulse wireplumber \
+    libportaudio2 libsndfile1 libnotify-bin ffmpeg pipx pulseaudio-utils
+pipx install -e .                              # global `listen` command
+pipx inject am-i-audible faster-whisper soxr   # transcription (optional)
+listen --enable-gpu                            # NVIDIA CUDA libs (optional)
+listen --prefetch                              # pre-download the models
+```
+</details>
 
 ## Usage
 
@@ -79,10 +96,12 @@ listen --gpu-check           # report whether GPU transcription is available
 listen --no-browser --port 8800   # headless / fixed port
 ```
 
-In the dashboard: toggle tracks + live transcription, hit **Start**, watch the waveforms
-and transcript, drop **markers**, **pause/resume**, adjust **gain**, **swap the mic** gaplessly,
-then **Exit & save** (bottom-right) with a custom name. The **History** tab plays back, downloads,
-and re-transcribes past recordings.
+In the dashboard, pick a mode — **Record + Transcribe** (live transcript) or
+**Record only · transcribe after** — then **Pause/Resume**, drop **markers**, adjust **gain**,
+and **swap the mic** gaplessly. **Save** (bottom-right) names the recording, kicks off background
+transcription, and returns you home (the app stays open); **Exit** quits. The **History** tab plays
+back, downloads, and re-transcribes past recordings — all transcription runs in the background and
+fires a desktop notification when done.
 
 ### Terminal (no UI)
 
