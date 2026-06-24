@@ -41,7 +41,7 @@ if [ ! -f "$HF_HOME/.prefetched" ]; then
   echo "First run: downloading speech models once (a few minutes)…"
   "$HERE/usr/bin/listen" --prefetch && touch "$HF_HOME/.prefetched"
 fi
-exec "$HERE/usr/bin/listen" "$@"
+exec "$HERE/usr/bin/listen" --window "$@"
 EOF
 chmod 755 "$APPDIR/AppRun"
 

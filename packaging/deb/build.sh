@@ -44,7 +44,7 @@ Type=Application
 Name=am-I-audible
 GenericName=Meeting Recorder
 Comment=Record & transcribe meetings (mic + system audio)
-Exec=listen
+Exec=listen --window
 Icon=am-i-audible
 Terminal=false
 Categories=AudioVideo;Audio;Recorder;
@@ -59,7 +59,8 @@ Section: sound
 Priority: optional
 Architecture: $ARCH
 Depends: pipewire, pipewire-pulse, wireplumber, libportaudio2, libsndfile1,
- libnotify-bin, ffmpeg, python3 (>= 3.10), python3-venv, python3-pip
+ libnotify-bin, ffmpeg, python3 (>= 3.10), python3-venv, python3-pip,
+ python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1
 Recommends: pulseaudio-utils
 Maintainer: krsatyam36 <noreply@users.noreply.github.com>
 Description: Linux dual-track meeting recorder + offline transcription
@@ -73,9 +74,14 @@ cat > "$STAGE/DEBIAN/postinst" <<'EOF'
 set -e
 APP=/opt/am-i-audible
 echo "Setting up am-I-audible (one-time)…"
-python3 -m venv "$APP/venv"
+# --system-site-packages so pywebview can use the system GTK/WebKit2 bindings
+# (PyGObject isn't pip-installable cleanly) for a true native app window.
+# Recreate from scratch so reinstalls/upgrades pick up the flag + new deps.
+rm -rf "$APP/venv"
+python3 -m venv --system-site-packages "$APP/venv"
 "$APP/venv/bin/pip" install --upgrade pip >/dev/null
 "$APP/venv/bin/pip" install "$APP/app[stt]"
+"$APP/venv/bin/pip" install pywebview   # native desktop window
 # GPU libraries if an NVIDIA GPU is present
 if command -v nvidia-smi >/dev/null 2>&1; then
   "$APP/venv/bin/pip" install nvidia-cublas-cu12 nvidia-cudnn-cu12 || true
