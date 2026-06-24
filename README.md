@@ -21,7 +21,7 @@ Designed for Linux PipeWire (with a PulseAudio fallback), it creates virtual nul
 
 ## Current Status
 
-**v1.5.0 — CI/CD pipeline, .deb + AppImage packaging, Makefile build targets.**
+**v1.6.0 — Dedicated app window, open-browser API, native desktop mode, packaging enhancements.**
 
 Capture & routing
 - Virtual sink creation (system + mic on **separate** tracks), auto-detected backend (PipeWire-native or `pactl`)

@@ -13,7 +13,9 @@ import argparse
 import asyncio
 import logging
 import os
+import shutil
 import socket
+import subprocess
 import threading
 import webbrowser
 from pathlib import Path
@@ -38,6 +40,7 @@ class AppState:
         self.controller = CaptureController()
         self.clients: set[WebSocket] = set()
         self.server: uvicorn.Server | None = None
+        self.url: str | None = None
 
     def request_shutdown(self) -> None:
         if self.server:
@@ -63,6 +66,12 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/api/status")
     async def status():
         return ctrl.status()
+
+    @app.post("/api/open-browser")
+    async def open_browser():
+        if state.url:
+            webbrowser.open(state.url)
+        return {"ok": bool(state.url)}
 
     @app.post("/api/start")
     async def start(body: dict | None = None):
@@ -173,7 +182,8 @@ def install_desktop(extra_args: str = "") -> Path:
     icon = STATIC_DIR / "icon.svg"
     entry = apps / "am-i-audible.desktop"
     listen_bin = Path.home() / ".local/bin/listen"
-    exec_cmd = str(listen_bin) if listen_bin.exists() else "listen"
+    # The app-drawer entry opens a dedicated app window (not a browser tab).
+    exec_cmd = (str(listen_bin) if listen_bin.exists() else "listen") + " --window"
     if extra_args:
         exec_cmd = f"{exec_cmd} {extra_args}"
     entry.write_text(
@@ -287,19 +297,39 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _try_native_window(url: str) -> bool:
-    """Open a dedicated desktop window via pywebview. False if unavailable."""
+def _open_app_window(url: str) -> str:
+    """Open the UI as a dedicated app window. Returns the mode used:
+
+      "pywebview" — true native window; this call BLOCKS until it's closed.
+      "spawned"   — a Chromium-family app-mode window was launched (detached);
+                    the server should keep running.
+      "none"      — no app window available; caller should open a browser tab.
+    """
+    # 1. pywebview — a real native window (blocks until closed).
     try:
         import webview  # pywebview
-    except Exception:
-        return False
-    try:
         webview.create_window("am-I-audible", url, width=1180, height=760)
         webview.start()
-        return True
-    except Exception as exc:
-        log.warning("native window failed (%s); falling back to browser", exc)
-        return False
+        return "pywebview"
+    except Exception:
+        pass
+    # 2. Chromium-family --app mode: a borderless dedicated window, no extra deps.
+    import tempfile
+    for browser in ("google-chrome", "google-chrome-stable", "chromium",
+                    "chromium-browser", "brave-browser", "microsoft-edge"):
+        path = shutil.which(browser)
+        if not path:
+            continue
+        try:
+            profile = tempfile.mkdtemp(prefix="amia-app-")
+            subprocess.Popen([path, f"--app={url}", f"--user-data-dir={profile}",
+                              "--no-first-run", "--no-default-browser-check"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log.info("opened app window via %s --app", browser)
+            return "spawned"
+        except Exception as exc:
+            log.warning("%s --app failed: %s", browser, exc)
+    return "none"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -334,8 +364,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.doctor:
         return doctor()
     if args.install_desktop:
-        extra = " ".join(a for a, on in
-                         (("--window", args.window), ("--autostart", args.autostart)) if on)
+        # --window is already baked into the launcher; only forward --autostart.
+        extra = "--autostart" if args.autostart else ""
         entry = install_desktop(extra)
         print(f"Installed launcher: {entry}\nLook for “am-I-audible” in your app drawer.")
         return 0
@@ -344,6 +374,7 @@ def main(argv: list[str] | None = None) -> int:
     app = create_app(state)
     port = args.port or _free_port()
     url = f"http://127.0.0.1:{port}"
+    state.url = url
     state.server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
 
@@ -355,19 +386,20 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.window:
-            # server in a background thread; native window owns the main thread
+            # server in a background thread; the app window owns the main thread
             t = threading.Thread(target=state.server.run, daemon=True)
             t.start()
-            if _try_native_window(url):
+            mode = _open_app_window(url)
+            if mode == "pywebview":
+                # native window closed -> quit the app
                 state.request_shutdown()
                 t.join(timeout=3)
                 if state.controller.is_recording:
                     state.controller.finish(None, do_transcribe=False)
                 return 0
-            # fell back: keep server running, open a browser instead
-            if not args.no_browser:
-                webbrowser.open(url)
-            t.join()
+            if mode == "none" and not args.no_browser:
+                webbrowser.open(url)  # no app window available -> plain tab
+            t.join()  # "spawned" app window (or tab): keep the server running
         else:
             if not args.no_browser and not os.environ.get("AMIA_NO_BROWSER"):
                 threading.Thread(

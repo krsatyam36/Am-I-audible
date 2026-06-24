@@ -1,3 +1,3 @@
 """am-I-audible -- Linux-native dual-audio capture + transcription pipeline."""
 
-__version__ = "1.5.0"
+__version__ = "1.6.0"

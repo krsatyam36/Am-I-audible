@@ -282,6 +282,10 @@ function showView(which) {
   $("nav-history").classList.toggle("active", which === "history");
   if (which === "history") loadSessions();
 }
+$("open-browser").addEventListener("click", async () => {
+  await api("/api/open-browser", {});
+  toast("Opened in your web browser");
+});
 $("nav-record").addEventListener("click", () => showView("record"));
 $("nav-history").addEventListener("click", () => showView("history"));
 $("refresh-sessions").addEventListener("click", loadSessions);
