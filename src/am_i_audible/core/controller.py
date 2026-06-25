@@ -157,7 +157,8 @@ class CaptureController:
             routes = self._router.setup()
             self._recorder = DualTrackRecorder(
                 mic_monitor=routes.mic_monitor, system_monitor=routes.system_monitor,
-                out_dir=self._out_dir, record_mic=record_mic, record_system=record_system)
+                out_dir=self._out_dir, record_mic=record_mic, record_system=record_system,
+                capture_argv=self._router.capture_argv)
 
             # Start capture FIRST so recording/waveforms/timer never wait on the
             # model. STT (one shared model for all tracks) loads in the background

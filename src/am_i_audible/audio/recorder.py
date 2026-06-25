@@ -1,8 +1,12 @@
-"""Dual-track capture: one ``pw-record`` per monitor source, streamed to WAV.
+"""Dual-track capture: one capture process per monitor source, streamed to WAV.
 
-Each track runs ``pw-record --target <monitor> ... -`` which emits continuous
-raw s16 mono PCM on stdout (verified continuous and gap-free on this stack). A
-reader thread drains stdout in ~100 ms chunks and, for every chunk:
+Each track runs a backend-supplied capture command (``parec --device`` on the
+pactl backend, ``pw-record --target`` on the pipewire-native one) that emits
+continuous raw s16 mono PCM on stdout. The pactl distinction matters: a
+null-sink ``*.monitor`` is a PulseAudio source name that ``pw-record`` cannot
+resolve -- it falls back to the default mic, making every track identical -- so
+the backend chooses the tool that resolves its own monitor names. A reader
+thread drains stdout in ~100 ms chunks and, for every chunk:
 
   * appends it to the track's WAV file via ``soundfile`` (flushed each chunk so
     a crash loses at most one chunk), and
@@ -38,13 +42,33 @@ class CaptureError(RuntimeError):
     pass
 
 
+def _default_capture_argv(target: str) -> list[str]:
+    """Fallback capture command (pw-record) for callers without a backend.
+
+    Note: pw-record cannot resolve pactl null-sink ``*.monitor`` source names,
+    so real sessions pass the backend-supplied argv via the router instead.
+    """
+    return [
+        "pw-record", "--target", target,
+        "--rate", str(config.SAMPLE_RATE),
+        "--channels", str(config.CHANNELS),
+        "--format", "s16",
+        "-",
+    ]
+
+
 class TrackCapture:
     """Capture a single monitor source to one WAV file on a background thread."""
 
-    def __init__(self, name: str, target: str, out_path: Path):
+    def __init__(self, name: str, target: str, out_path: Path,
+                 capture_argv=None):
         self.name = name
         self.target = target
         self.out_path = out_path
+        # How to launch the capture process for this monitor. Backend-supplied
+        # (parec on pactl, pw-record on pipewire-native); falls back to
+        # pw-record for callers that don't pass one.
+        self._capture_argv = capture_argv or _default_capture_argv
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
         self._file: sf.SoundFile | None = None
@@ -106,13 +130,7 @@ class TrackCapture:
             subtype="PCM_16",
         )
         self._proc = subprocess.Popen(
-            [
-                "pw-record", "--target", self.target,
-                "--rate", str(config.SAMPLE_RATE),
-                "--channels", str(config.CHANNELS),
-                "--format", "s16",
-                "-",
-            ],
+            self._capture_argv(self.target),
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             bufsize=0,
@@ -183,15 +201,18 @@ class DualTrackRecorder:
     """Starts/stops both track captures together."""
 
     def __init__(self, mic_monitor: str, system_monitor: str, out_dir: Path,
-                 record_mic: bool = True, record_system: bool = True):
+                 record_mic: bool = True, record_system: bool = True,
+                 capture_argv=None):
         self.out_dir = out_dir
         self.tracks: list[TrackCapture] = []
         if record_mic:
             self.tracks.append(TrackCapture(
-                "mic", mic_monitor, out_dir / config.MIC_TRACK_FILENAME))
+                "mic", mic_monitor, out_dir / config.MIC_TRACK_FILENAME,
+                capture_argv))
         if record_system:
             self.tracks.append(TrackCapture(
-                "system", system_monitor, out_dir / config.SYSTEM_TRACK_FILENAME))
+                "system", system_monitor, out_dir / config.SYSTEM_TRACK_FILENAME,
+                capture_argv))
         if not self.tracks:
             raise CaptureError("nothing to record: mic and system both disabled")
 

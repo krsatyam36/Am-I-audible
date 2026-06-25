@@ -106,6 +106,24 @@ class PactlBackend:
         _run(["pactl", "unload-module", str(handle.payload)], check=False)
         log.info("pactl: unloaded module %s (%s)", handle.payload, handle.label)
 
+    def capture_argv(self, target: str) -> list[str]:
+        """Record ``target`` as raw s16 mono PCM on stdout via ``parec``.
+
+        A null-sink ``*.monitor`` is a PulseAudio *source* name, not a distinct
+        PipeWire node, so ``pw-record --target`` cannot resolve it and silently
+        falls back to the default capture device -- which makes every track
+        record the same microphone. ``parec --device`` resolves the monitor
+        source correctly, so on the pactl backend it is the right capture tool.
+        """
+        return [
+            "parec",
+            f"--device={target}",
+            f"--rate={config.SAMPLE_RATE}",
+            f"--channels={config.CHANNELS}",
+            "--format=s16le",
+            "--raw",
+        ]
+
 
 # --------------------------------------------------------------------------- #
 # PipeWire-native backend                                                     #
@@ -138,9 +156,7 @@ class PipeWireBackend:
         return self._inspect_default("@DEFAULT_AUDIO_SINK@")
 
     def monitor_of(self, sink_name: str) -> str:
-        if sink_name.startswith(config.OBJECT_PREFIX):
-            return f"{sink_name}.monitor"
-        return sink_name
+        return f"{sink_name}.monitor"
 
     def list_sources(self) -> list[str]:
         # Best-effort via pw-dump JSON; empty list if unavailable.
@@ -213,6 +229,21 @@ class PipeWireBackend:
             src, dst = handle.payload  # type: ignore[misc]
             _run(["pw-link", "-d", src, dst], check=False)
             log.info("pipewire: unlinked %s", handle.label)
+
+    def capture_argv(self, target: str) -> list[str]:
+        """Record ``target`` as raw s16 mono PCM on stdout via ``pw-record``.
+
+        Here the sink's monitor is a real PipeWire node (the ``pw-loopback``
+        playback end, ``node.name=<sink>.monitor``), so ``--target`` resolves
+        it directly.
+        """
+        return [
+            "pw-record", "--target", target,
+            "--rate", str(config.SAMPLE_RATE),
+            "--channels", str(config.CHANNELS),
+            "--format", "s16",
+            "-",
+        ]
 
 
 # --------------------------------------------------------------------------- #

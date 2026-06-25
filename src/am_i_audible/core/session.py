@@ -60,6 +60,7 @@ class RecordingSession:
             out_dir=self.out_dir,
             record_mic=self.record_mic,
             record_system=self.record_system,
+            capture_argv=router.capture_argv,
         )
         recorder.start()
 

@@ -126,6 +126,12 @@ class AudioRouter:
     def backend_name(self) -> str:
         return self._backend.name
 
+    def capture_argv(self, target: str) -> list[str]:
+        """Backend-specific argv that records ``target`` as raw s16 mono PCM
+        on stdout. The recorder uses this so each backend captures its monitor
+        with a tool that can actually resolve the monitor source name."""
+        return self._backend.capture_argv(target)
+
     @property
     def current_mic(self) -> str | None:
         return self._current_mic_source

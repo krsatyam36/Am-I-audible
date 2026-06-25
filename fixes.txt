@@ -1,0 +1,157 @@
+================================================================================
+am-I-audible — Fixes Log
+================================================================================
+Date:    2026-06-25
+Branch:  v1.4.1 (detached at tag v1.4.1)
+Scope:   Two separate issues fixed — (1) dual-track recording captured
+         identical audio on both tracks; (2) transcription failed with
+         "faster-whisper not installed".
+
+
+================================================================================
+FIX 1 — Dual-track recording captured IDENTICAL audio on both tracks
+================================================================================
+
+SYMPTOM
+-------
+Recording produced a "mic" track and a "system" track that were byte-for-byte
+identical. System audio (e.g. the other side of a call) was missing entirely;
+both tracks just contained the microphone.
+
+ROOT CAUSE
+----------
+NOT a routing problem — the PulseAudio loopbacks were wired correctly
+(mic  <- real microphone, system <- speaker monitor).
+
+The bug was in the CAPTURE TOOL. The recorder launched:
+
+    pw-record --target am_i_audible_mic.monitor
+    pw-record --target am_i_audible_sys.monitor
+
+A pactl null-sink's "*.monitor" is a PulseAudio SOURCE name, not a distinct
+PipeWire node (only the sink node exists). pw-record's --target cannot resolve
+that name, so it SILENTLY FALLS BACK to the default capture device (the real
+microphone). Both capture processes therefore recorded the same microphone →
+identical tracks, with system audio never captured.
+
+This is backend-specific: the PipeWire-native backend's pw-loopback DOES create
+a real "<sink>.monitor" node, so pw-record works there — but the active backend
+on this machine is pactl.
+
+(Note: the earlier "identical bytes" reproduction was partly a false positive
+too — with no audio playing, both tracks were silence (all zeros), which is
+trivially identical.)
+
+THE FIX
+-------
+Each audio backend now supplies its OWN capture command via a new
+`capture_argv(target)` method, so each backend uses a tool that can actually
+resolve its monitor names:
+
+  * PactlBackend     -> parec --device=<monitor> --format=s16le --raw
+                        (parec resolves PulseAudio monitor source names)
+  * PipeWireBackend  -> pw-record --target <monitor>
+                        (its monitor IS a real PipeWire node)
+
+Files changed:
+  - src/am_i_audible/audio/backends.py
+        + PactlBackend.capture_argv()      (parec)
+        + PipeWireBackend.capture_argv()   (pw-record)
+  - src/am_i_audible/audio/router.py
+        + AudioRouter.capture_argv()       (delegates to the active backend)
+  - src/am_i_audible/audio/recorder.py
+        + TrackCapture and DualTrackRecorder accept a `capture_argv` builder
+        + module-level _default_capture_argv() fallback (pw-record)
+        + Popen now uses the backend-supplied argv instead of a hardcoded
+          pw-record command
+        + updated module docstring
+  - src/am_i_audible/core/session.py
+        + passes capture_argv=router.capture_argv to DualTrackRecorder
+  - src/am_i_audible/core/controller.py
+        + passes capture_argv=self._router.capture_argv to DualTrackRecorder
+  - tests/test_router.py
+        + test_capture_uses_parec_with_device  (pactl backend)
+        + test_capture_uses_pw_record          (pipewire backend)
+
+VERIFICATION
+------------
+End-to-end through DualTrackRecorder with a 440 Hz tone played to the system
+output:
+    mic rms = 0.014   (microphone noise)
+    sys rms = 0.238   (the tone — system audio captured correctly)
+    identical? = False
+Full test suite: 20 passed.
+
+ACTION REQUIRED
+---------------
+Re-record after restarting with the patched code. Recordings made BEFORE this
+fix (e.g. "testing-chatgpt") may still contain the duplicated-audio bug.
+
+
+================================================================================
+FIX 2 — Transcription failed: "faster-whisper not installed"
+================================================================================
+
+SYMPTOM
+-------
+Pressing "Transcribe" in the web UI showed:
+    Failed: faster-whisper not installed
+even though some older recordings already had transcripts.
+
+ROOT CAUSE
+----------
+A SPLIT PYTHON ENVIRONMENT (not a code bug):
+
+  * The `listen` launcher (~/.local/bin/listen) runs under SYSTEM python3
+    (#!/usr/bin/python3). am-i-audible is installed there as an EDITABLE
+    package (~/.local/lib/python3.12/site-packages -> project src/).
+    BUT the optional [stt] extra (faster-whisper, soxr) was NOT installed
+    in that system Python.
+
+  * A separate, orphan .venv in the project folder HAD faster-whisper 1.2.1
+    installed — but did NOT have am_i_audible. Nothing actually used this venv.
+
+So the running app (system Python) could not import faster_whisper and reported
+it as not installed.
+
+THE FIX
+-------
+Installed the project's declared [stt] dependencies into the SAME Python that
+runs the app (system user site). Because this machine is PEP-668 /
+externally-managed (Ubuntu 24.04) and the editable app was already installed
+the same way, used --break-system-packages:
+
+    python3 -m pip install --user --break-system-packages \
+        "faster-whisper>=1.0" "soxr>=0.3"
+
+Installed: faster-whisper 1.2.1, soxr 1.1.0, plus deps (ctranslate2, av,
+onnxruntime, tokenizers, huggingface-hub, etc.).
+
+No code changes — environment fix only.
+
+VERIFICATION
+------------
+Under the exact interpreter `listen` uses (/usr/bin/python3), from a neutral
+directory:
+    faster_whisper 1.2.1
+    soxr 1.1.0
+    transcribe.available('faster-whisper') -> True
+    app import OK
+`~/.local/bin` confirmed on PATH, so `listen` works from any directory.
+
+ACTION REQUIRED
+---------------
+Quit the `listen` server that was already running (it imported its modules at
+startup, before faster-whisper was installed, so it still thinks STT is
+missing), then start `listen` again and retry Transcribe.
+
+
+================================================================================
+ENVIRONMENT NOTES (how this machine is set up)
+================================================================================
+- am-i-audible runs entirely from SYSTEM Python — no virtual env in use.
+- Launcher: ~/.local/bin/listen  (shebang #!/usr/bin/python3)
+- Editable install location: /home/kumarsatyam/Projects/Am-I-audible/src
+    -> the project folder must stay at this path or `listen` breaks.
+- The .venv inside the project is orphaned/unused and can be ignored.
+================================================================================
